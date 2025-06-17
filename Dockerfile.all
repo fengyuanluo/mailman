@@ -1,0 +1,49 @@
+# Multi-stage build for all-in-one image
+
+# Build backend
+FROM golang:1.23-alpine AS backend-builder
+WORKDIR /app
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o mailman ./cmd/mailman
+
+# Build frontend
+FROM node:18-alpine AS frontend-builder
+WORKDIR /app
+COPY frontend/package*.json ./
+RUN npm ci --only=production
+COPY frontend/ .
+RUN npm run build
+
+# Final all-in-one image
+FROM nginx:alpine
+
+# Install supervisor and other dependencies
+RUN apk add --no-cache supervisor
+
+# Copy backend binary
+COPY --from=backend-builder /app/mailman /usr/local/bin/mailman
+
+# Copy frontend build
+COPY --from=frontend-builder /app/.next/static /usr/share/nginx/html/_next/static
+COPY --from=frontend-builder /app/.next/standalone /usr/share/nginx/html
+
+# Copy nginx configuration for all-in-one
+COPY nginx-all.conf /etc/nginx/nginx.conf
+
+# Copy backend email.txt if exists
+COPY backend/email.txt /app/email.txt
+
+# Create supervisor configuration
+RUN mkdir -p /etc/supervisor/conf.d
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Create log directories
+RUN mkdir -p /var/log/nginx /app
+
+# Expose ports
+EXPOSE 80 8080
+
+# Start supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

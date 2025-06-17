@@ -1,0 +1,45 @@
+# Build stage
+FROM node:18-alpine AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Nginx stage
+FROM nginx:alpine
+
+# Copy custom nginx config
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Copy built files from builder
+COPY --from=builder /app/.next/static /usr/share/nginx/html/_next/static
+COPY --from=builder /app/public /usr/share/nginx/html
+
+# Copy Next.js standalone output
+COPY --from=builder /app/.next/standalone /app
+
+# Install Node.js in nginx image for Next.js server
+RUN apk add --no-cache nodejs npm
+
+# Create startup script
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo 'HOSTNAME=0.0.0.0 node /app/server.js &' >> /start.sh && \
+    echo 'nginx -g "daemon off;"' >> /start.sh && \
+    chmod +x /start.sh
+
+# Expose port
+EXPOSE 80
+
+# Start both Next.js server and nginx
+CMD ["/start.sh"]
