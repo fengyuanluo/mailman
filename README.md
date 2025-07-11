@@ -135,6 +135,94 @@ docker-compose up -d
 - 后端API：http://localhost:8080
 - API文档：http://localhost:8080/swagger/index.html
 
+### 使用All-in-One镜像部署
+
+All-in-One镜像包含了完整的前端和后端服务，是最简单的部署方式。
+
+#### 使用SQLite数据库（推荐）
+
+```bash
+# 基础部署 - 使用SQLite数据库
+docker run -d \
+  --name mailman \
+  -p 80:80 \
+  -p 8080:8080 \
+  -v mailman_data:/app \
+  ghcr.io/seongminhwan/mailman-all:latest
+```
+
+#### 数据持久化配置
+
+为了确保数据持久化，建议使用以下配置：
+
+```bash
+# 创建数据目录
+mkdir -p ./data
+
+# 运行容器并挂载数据目录
+docker run -d \
+  --name mailman \
+  -p 80:80 \
+  -p 8080:8080 \
+  -v $(pwd)/data:/app \
+  -e DB_DRIVER=sqlite \
+  -e DB_NAME=/app/mailman.db \
+  ghcr.io/seongminhwan/mailman-all:latest
+```
+
+#### 使用MySQL数据库
+
+```bash
+# 连接外部MySQL数据库
+docker run -d \
+  --name mailman \
+  -p 80:80 \
+  -p 8080:8080 \
+  -e DB_DRIVER=mysql \
+  -e DB_HOST=your_mysql_host \
+  -e DB_PORT=3306 \
+  -e DB_USER=your_mysql_user \
+  -e DB_PASSWORD=your_mysql_password \
+  -e DB_NAME=mailman \
+  ghcr.io/seongminhwan/mailman-all:latest
+```
+
+#### 完整配置示例
+
+```bash
+# 包含所有常用配置的完整示例
+docker run -d \
+  --name mailman \
+  -p 80:80 \
+  -p 8080:8080 \
+  -v $(pwd)/data:/app \
+  -e DB_DRIVER=sqlite \
+  -e DB_NAME=/app/mailman.db \
+  -e OPENAI_API_KEY=your-openai-api-key \
+  -e LOG_LEVEL=INFO \
+  --restart unless-stopped \
+  ghcr.io/seongminhwan/mailman-all:latest
+```
+
+#### 重要注意事项
+
+⚠️ **数据库文件挂载注意事项**：
+
+1. **数据目录权限**：确保挂载的数据目录有正确的读写权限
+2. **SQLite文件位置**：SQLite数据库文件默认保存在 `/app/mailman.db`
+3. **数据备份**：定期备份 `/app` 目录中的数据文件
+4. **容器更新**：更新容器时，数据目录挂载确保数据不丢失
+
+📋 **端口说明**：
+- `80`: 前端Web界面
+- `8080`: 后端API服务
+
+🔧 **环境变量配置**：
+- `DB_DRIVER`: 数据库类型（`sqlite` 或 `mysql`）
+- `DB_NAME`: 数据库名称或SQLite文件路径
+- `OPENAI_API_KEY`: OpenAI API密钥（可选）
+- `LOG_LEVEL`: 日志级别（DEBUG, INFO, WARN, ERROR）
+
 ### 本地开发部署
 
 #### 后端部署
