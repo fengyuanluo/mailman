@@ -160,8 +160,8 @@ jobs:
           # Copy nginx configuration
           COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
           
-          # Copy backend email.txt if exists
-          COPY backend/email.txt /app/email.txt 2>/dev/null || echo "email.txt not found"
+          # Create empty email.txt if needed
+          RUN touch /app/email.txt
           
           # Create supervisor configuration
           RUN mkdir -p /etc/supervisor/conf.d
