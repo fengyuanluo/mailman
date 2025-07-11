@@ -161,12 +161,14 @@ jobs:
           # Copy nginx configuration for all-in-one
           COPY nginx-all.conf /etc/nginx/nginx.conf
           
+          # Create supervisor configuration and app directory
+          RUN mkdir -p /etc/supervisor/conf.d /app
+          
           # Create empty email.txt if needed
           RUN touch /app/email.txt
           
           # Create supervisor configuration
-          RUN mkdir -p /etc/supervisor/conf.d
-          COPY <<'SUPERVISOR_CONF' /etc/supervisor/conf.d/supervisord.conf
+          RUN cat > /etc/supervisor/conf.d/supervisord.conf << 'EOF'
           [supervisord]
           nodaemon=true
           user=root
@@ -184,10 +186,10 @@ jobs:
           stderr_logfile=/var/log/mailman.log
           autorestart=true
           environment=SERVER_HOST="0.0.0.0",SERVER_PORT="8080"
-          SUPERVISOR_CONF
+          EOF
           
           # Create log directories
-          RUN mkdir -p /var/log/nginx /app
+          RUN mkdir -p /var/log/nginx
           
           # Expose ports
           EXPOSE 80 8080
@@ -218,12 +220,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create Release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           body: |
             ## Docker Images
 
@@ -232,7 +234,7 @@ jobs:
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.ref_name }}
             ```
 
-            ### Frontend  
+            ### Frontend
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.ref_name }}
             ```
@@ -243,15 +245,28 @@ jobs:
             ```
 
             ## Quick Start with All-in-One Image
+            
+            ### Using SQLite (Default)
             ```bash
             docker run -d \
               --name mailman \
               -p 80:80 \
               -p 8080:8080 \
-              -e MYSQL_ROOT_PASSWORD=your_password \
-              -e MYSQL_DATABASE=mailman \
-              -e MYSQL_USER=mailman \
-              -e MYSQL_PASSWORD=your_password \
+              -v mailman_data:/app \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-all:${{ github.ref_name }}
+            ```
+            
+            ### Using MySQL
+            ```bash
+            docker run -d \
+              --name mailman \
+              -p 80:80 \
+              -p 8080:8080 \
+              -e DB_DRIVER=mysql \
+              -e DB_HOST=your_mysql_host \
+              -e DB_USER=your_mysql_user \
+              -e DB_PASSWORD=your_mysql_password \
+              -e DB_NAME=mailman \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-all:${{ github.ref_name }}
             ```
           draft: false
