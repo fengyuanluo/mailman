@@ -97,7 +97,6 @@ jobs:
 
   build-all-in-one:
     runs-on: ubuntu-latest
-    needs: [build-backend, build-frontend]
     permissions:
       contents: read
       packages: write
@@ -123,80 +122,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Create all-in-one Dockerfile
-        run: |
-          cat > Dockerfile.all << 'EOF'
-          # Multi-stage build for all-in-one image
-          
-          # Build backend
-          FROM golang:1.23-alpine AS backend-builder
-          WORKDIR /app
-          COPY backend/go.mod backend/go.sum ./
-          RUN go mod download
-          COPY backend/ .
-          RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o mailman ./cmd/mailman
-          
-          # Build frontend
-          FROM node:18-alpine AS frontend-builder
-          WORKDIR /app
-          COPY frontend/package*.json ./
-          RUN npm ci
-          COPY frontend/ .
-          RUN npm run build
-          
-          # Final all-in-one image
-          FROM nginx:alpine
-          
-          # Install supervisor and other dependencies
-          RUN apk add --no-cache supervisor
-          
-          # Copy backend binary
-          COPY --from=backend-builder /app/mailman /usr/local/bin/mailman
-          
-          # Copy frontend build
-          COPY --from=frontend-builder /app/.next/static /usr/share/nginx/html/_next/static
-          COPY --from=frontend-builder /app/.next/standalone /usr/share/nginx/html
-          
-          # Copy nginx configuration for all-in-one
-          COPY nginx-all.conf /etc/nginx/nginx.conf
-          
-          # Create supervisor configuration and app directory
-          RUN mkdir -p /etc/supervisor/conf.d /app
-          
-          # Create empty email.txt if needed
-          RUN touch /app/email.txt
-          
-          # Create supervisor configuration
-          RUN cat > /etc/supervisor/conf.d/supervisord.conf << 'EOF'
-          [supervisord]
-          nodaemon=true
-          user=root
-          
-          [program:nginx]
-          command=nginx -g "daemon off;"
-          stdout_logfile=/var/log/nginx/access.log
-          stderr_logfile=/var/log/nginx/error.log
-          autorestart=true
-          
-          [program:mailman]
-          command=/usr/local/bin/mailman
-          directory=/app
-          stdout_logfile=/var/log/mailman.log
-          stderr_logfile=/var/log/mailman.log
-          autorestart=true
-          environment=SERVER_HOST="0.0.0.0",SERVER_PORT="8080"
-          EOF
-          
-          # Create log directories
-          RUN mkdir -p /var/log/nginx
-          
-          # Expose ports
-          EXPOSE 80 8080
-          
-          # Start supervisor
-          CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
-          EOF
 
       - name: Build and push all-in-one image
         uses: docker/build-push-action@v5
