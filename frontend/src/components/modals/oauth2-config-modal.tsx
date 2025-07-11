@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { oauth2Service } from '@/services/oauth2.service'
 import { OAuth2GlobalConfig, OAuth2ProviderType, CreateOAuth2ConfigRequest } from '@/types'
+import OAuth2HelpModal from './oauth2-help-modal'
 import toast from 'react-hot-toast'
 
 // 配置指导Tooltip组件
@@ -144,6 +145,7 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
     const [jsonConfig, setJsonConfig] = useState('')
     const [showJsonInput, setShowJsonInput] = useState(false)
     const [showConfigGuideTooltip, setShowConfigGuideTooltip] = useState(false)
+    const [showHelpModal, setShowHelpModal] = useState(false)
 
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
@@ -219,8 +221,8 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
                 setRedirectUri(webConfig.redirect_uris[0])
             }
 
-            // 设置Gmail默认权限范围
-            setScopes(['https://www.googleapis.com/auth/gmail.readonly'])
+            // 设置Gmail固定权限范围（受保护）
+            setScopes(oauth2Service.getGmailProtectedScopes())
 
             setError('')
             setValidationErrors([])
@@ -274,6 +276,13 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
         }
     }, [provider, config])
 
+    // 强制Gmail使用固定的受保护scope
+    useEffect(() => {
+        if (provider === 'gmail') {
+            setScopes(oauth2Service.getGmailProtectedScopes())
+        }
+    }, [provider])
+
     // 验证表单
     const validateForm = () => {
         const configData: CreateOAuth2ConfigRequest = {
@@ -290,16 +299,22 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
         return validation.valid
     }
 
-    // 添加自定义作用域
+    // 添加自定义作用域（Gmail受保护，不允许添加）
     const addCustomScope = () => {
+        if (provider === 'gmail') {
+            return // Gmail的scope受保护，不允许添加自定义scope
+        }
         if (customScope.trim() && !scopes.includes(customScope.trim())) {
             setScopes([...scopes, customScope.trim()])
             setCustomScope('')
         }
     }
 
-    // 删除作用域
+    // 删除作用域（Gmail受保护scope不可删除）
     const removeScope = (index: number) => {
+        if (provider === 'gmail') {
+            return // Gmail的scope受保护，不允许删除
+        }
         setScopes(scopes.filter((_, i) => i !== index))
     }
 
@@ -351,12 +366,23 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
                     <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
                         {config ? '编辑OAuth2配置' : '添加OAuth2配置'}
                     </h2>
-                    <button
-                        onClick={onClose}
-                        className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                    >
-                        <X className="h-6 w-6" />
-                    </button>
+                    <div className="flex items-center space-x-2">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setShowHelpModal(true)}
+                            className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                        >
+                            <HelpCircle className="h-4 w-4 mr-1" />
+                            配置指南
+                        </Button>
+                        <button
+                            onClick={onClose}
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                        >
+                            <X className="h-6 w-6" />
+                        </button>
+                    </div>
                 </div>
 
                 {/* 错误提示 */}
@@ -566,15 +592,48 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
                     <div>
                         <div className="flex items-center justify-between mb-2">
                             <Label>权限范围</Label>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={useDefaultScopes}
-                            >
-                                使用默认范围
-                            </Button>
+                            {provider === 'gmail' ? (
+                                <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">
+                                        Gmail受保护
+                                    </Badge>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={useDefaultScopes}
+                                        disabled
+                                        title="Gmail权限范围已固定，不可更改"
+                                    >
+                                        使用默认范围
+                                    </Button>
+                                </div>
+                            ) : (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={useDefaultScopes}
+                                >
+                                    使用默认范围
+                                </Button>
+                            )}
                         </div>
+
+                        {/* Gmail保护提示 */}
+                        {provider === 'gmail' && (
+                            <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-md">
+                                <div className="flex items-start gap-2">
+                                    <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+                                    <div className="text-sm text-blue-700 dark:text-blue-300">
+                                        <p className="font-medium">Gmail权限范围已固定</p>
+                                        <p className="text-xs mt-1">
+                                            为确保IMAP兼容性和OAuth2认证稳定性，Gmail的权限范围已固定为系统最优配置，不可编辑。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* 现有作用域 */}
                         <div className="flex flex-wrap gap-2 mb-3">
@@ -582,37 +641,67 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
                                 <Badge
                                     key={index}
                                     variant="secondary"
-                                    className="flex items-center gap-1"
+                                    className={`flex items-center gap-1 ${provider === 'gmail' ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-700' : ''}`}
                                 >
                                     {scope}
-                                    <button
-                                        type="button"
-                                        onClick={() => removeScope(index)}
-                                        className="ml-1 rounded-full p-1 hover:bg-gray-200 dark:hover:bg-gray-600"
-                                    >
-                                        <X className="h-3 w-3" />
-                                    </button>
+                                    {provider === 'gmail' ? (
+                                        <button
+                                            type="button"
+                                            disabled
+                                            title="Gmail权限范围受保护，不可删除"
+                                            className="ml-1 rounded-full p-1 cursor-not-allowed opacity-50"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            onClick={() => removeScope(index)}
+                                            className="ml-1 rounded-full p-1 hover:bg-gray-200 dark:hover:bg-gray-600"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </button>
+                                    )}
                                 </Badge>
                             ))}
                         </div>
 
                         {/* 添加自定义作用域 */}
-                        <div className="flex gap-2">
-                            <Input
-                                value={customScope}
-                                onChange={(e) => setCustomScope(e.target.value)}
-                                placeholder="添加自定义权限范围"
-                                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addCustomScope())}
-                            />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={addCustomScope}
-                                disabled={!customScope.trim()}
-                            >
-                                <Plus className="h-4 w-4" />
-                            </Button>
-                        </div>
+                        {provider === 'gmail' ? (
+                            <div className="flex gap-2">
+                                <Input
+                                    value=""
+                                    disabled
+                                    placeholder="Gmail权限范围已固定，不可添加自定义范围"
+                                    className="bg-gray-50 dark:bg-gray-800"
+                                />
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled
+                                    title="Gmail权限范围已固定，不可添加自定义范围"
+                                >
+                                    <Plus className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="flex gap-2">
+                                <Input
+                                    value={customScope}
+                                    onChange={(e) => setCustomScope(e.target.value)}
+                                    placeholder="添加自定义权限范围"
+                                    onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addCustomScope())}
+                                />
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={addCustomScope}
+                                    disabled={!customScope.trim()}
+                                >
+                                    <Plus className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        )}
                     </div>
 
                     {/* 启用状态 */}
@@ -654,6 +743,12 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
                     </div>
                 </form>
             </div>
+
+            {/* OAuth2帮助模态框 */}
+            <OAuth2HelpModal
+                isOpen={showHelpModal}
+                onClose={() => setShowHelpModal(false)}
+            />
         </div>
     )
 }

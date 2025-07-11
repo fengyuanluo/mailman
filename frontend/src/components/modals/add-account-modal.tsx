@@ -7,12 +7,16 @@ import { oauth2Service } from '@/services/oauth2.service'
 import { cn } from '@/lib/utils'
 import { motion, AnimatePresence } from 'framer-motion'
 import { createPortal } from 'react-dom'
+import OAuth2PopupAuth from '@/components/oauth2/oauth2-popup-auth'
 
 interface AddAccountModalProps {
     isOpen: boolean
     onClose: () => void
     onSuccess?: () => void
     onError?: (error: string) => void
+    presetProvider?: string
+    presetAuthType?: string
+    autoTriggerOAuth2?: boolean
 }
 
 interface MailProvider {
@@ -38,6 +42,7 @@ interface SingleAccountForm {
     proxyPassword: string
     isDomainMail: boolean
     domain: string
+    oauth2ProviderConfigId?: number
 }
 
 interface BatchAccountData {
@@ -53,7 +58,10 @@ export default function AddAccountModal({
     isOpen,
     onClose,
     onSuccess,
-    onError
+    onError,
+    presetProvider,
+    presetAuthType,
+    autoTriggerOAuth2
 }: AddAccountModalProps) {
     const [isVisible, setIsVisible] = useState(false)
     const [isAnimating, setIsAnimating] = useState(false)
@@ -64,6 +72,9 @@ export default function AddAccountModal({
     const [loadingProviders, setLoadingProviders] = useState(true)
     const [isTabTransitioning, setIsTabTransitioning] = useState(false)
     const [gmailOAuth2Available, setGmailOAuth2Available] = useState(false)
+    const [showOAuth2Popup, setShowOAuth2Popup] = useState(false)
+    const [oauth2Configs, setOauth2Configs] = useState<any[]>([])
+    const [loadingOAuth2Configs, setLoadingOAuth2Configs] = useState(false)
     const modalRoot = typeof document !== 'undefined' ? document.body : null
 
     // 用于动画高度过渡的ref
@@ -83,7 +94,8 @@ export default function AddAccountModal({
         proxyUsername: '',
         proxyPassword: '',
         isDomainMail: false,
-        domain: ''
+        domain: '',
+        oauth2ProviderConfigId: undefined
     })
 
     // 单独添加的一键解析
@@ -119,6 +131,40 @@ export default function AddAccountModal({
         }
     }, [isOpen])
 
+    // 处理预设参数
+    useEffect(() => {
+        if (isOpen && providers.length > 0) {
+            applyPresetParams()
+        }
+    }, [isOpen, providers, presetProvider, presetAuthType])
+
+    // 应用预设参数
+    const applyPresetParams = async () => {
+        if (presetProvider) {
+            const provider = providers.find(p => p.type === presetProvider)
+            if (provider) {
+                setSelectedProvider(provider.id)
+                await loadOAuth2Configs(provider.type)
+
+                // 设置认证类型
+                if (presetAuthType) {
+                    setSingleForm(prev => ({
+                        ...prev,
+                        authType: presetAuthType as 'password' | 'oauth2'
+                    }))
+                }
+
+                // 如果需要自动触发OAuth2
+                if (autoTriggerOAuth2 && presetAuthType === 'oauth2') {
+                    // 延迟0.2秒后自动触发OAuth2授权
+                    setTimeout(() => {
+                        handleGmailOAuth2Auth()
+                    }, 200)
+                }
+            }
+        }
+    }
+
     // 监听内容高度变化
     useEffect(() => {
         if (contentRef.current) {
@@ -145,12 +191,15 @@ export default function AddAccountModal({
             // 默认选择第一个提供商
             if (data.length > 0) {
                 setSelectedProvider(data[0].id)
+                // 加载第一个提供商的OAuth2配置
+                await loadOAuth2Configs(data[0].type)
             }
 
             // 检查Gmail OAuth2是否已配置
             try {
-                const isGmailConfigured = await oauth2Service.isProviderConfigured('gmail')
-                setGmailOAuth2Available(isGmailConfigured)
+                const configs = await oauth2Service.getGlobalConfigs()
+                const gmailConfig = configs.find(config => config.provider_type === 'gmail')
+                setGmailOAuth2Available(!!gmailConfig && gmailConfig.is_enabled)
             } catch (error) {
                 console.error('Failed to check Gmail OAuth2 configuration:', error)
                 setGmailOAuth2Available(false)
@@ -160,6 +209,33 @@ export default function AddAccountModal({
             onError?.('加载邮件提供商失败')
         } finally {
             setLoadingProviders(false)
+        }
+    }
+
+    // 加载OAuth2配置
+    const loadOAuth2Configs = async (providerType: string) => {
+        if (providerType !== 'gmail' && providerType !== 'outlook') {
+            setOauth2Configs([])
+            return
+        }
+
+        try {
+            setLoadingOAuth2Configs(true)
+            const configs = await oauth2Service.getGlobalConfigsByProvider(providerType as any)
+            setOauth2Configs(configs)
+
+            // 如果有配置，默认选择第一个
+            if (configs.length > 0) {
+                setSingleForm(prev => ({
+                    ...prev,
+                    oauth2ProviderConfigId: configs[0].id
+                }))
+            }
+        } catch (error) {
+            console.error('Failed to load OAuth2 configs:', error)
+            setOauth2Configs([])
+        } finally {
+            setLoadingOAuth2Configs(false)
         }
     }
 
@@ -181,24 +257,69 @@ export default function AddAccountModal({
         return false
     }
 
-    // 获取Gmail OAuth2授权 - 直接重定向到后端API
+    // 获取Gmail OAuth2授权 - 使用popup方式
     const handleGmailOAuth2Auth = async () => {
+        if (!selectedProvider) return
+
         try {
             setGettingGmailAuth(true)
-            const authUrl = await oauth2Service.getAuthUrl('gmail')
 
-            // 保存当前页面状态，以便授权完成后恢复
-            sessionStorage.setItem('oauth2_return_path', window.location.pathname)
-            sessionStorage.setItem('oauth2_provider', 'gmail')
+            // 检查是否为Gmail提供商
+            const provider = getSelectedProvider()
+            if (provider?.type !== 'gmail') {
+                setGettingGmailAuth(false)
+                return
+            }
 
-            // 直接重定向到OAuth2授权URL（指向后端API回调）
-            window.location.href = authUrl.auth_url
-
+            // 显示OAuth2 popup授权
+            setShowOAuth2Popup(true)
         } catch (err) {
-            console.error('Failed to get Gmail auth URL:', err)
-            onError?.('获取Gmail授权链接失败')
+            console.error('OAuth2 authorization error:', err)
+            onError?.('启动OAuth2授权失败')
             setGettingGmailAuth(false)
         }
+    }
+
+    // OAuth2授权成功回调
+    const handleOAuth2Success = async (result: { emailAddress: string; customSettings: any }) => {
+        try {
+            setShowOAuth2Popup(false)
+            setGettingGmailAuth(false)
+
+            // 将OAuth2授权结果回填到表单
+            const newFormData = {
+                ...singleForm,
+                email: result.emailAddress,
+                authType: 'oauth2' as const,
+                accessToken: result.customSettings.access_token || '',
+                refreshToken: result.customSettings.refresh_token || '',
+                clientId: result.customSettings.client_id || ''
+            }
+
+            console.log('OAuth2授权结果:', result)
+            console.log('准备回填的表单数据:', newFormData)
+
+            setSingleForm(newFormData)
+
+            // 显示成功提示
+            console.log('OAuth2授权成功，数据已回填到表单')
+        } catch (error) {
+            console.error('Failed to fill OAuth2 data:', error)
+            onError?.('OAuth2数据回填失败')
+        }
+    }
+
+    // OAuth2授权取消回调
+    const handleOAuth2Cancel = () => {
+        setShowOAuth2Popup(false)
+        setGettingGmailAuth(false)
+    }
+
+    // OAuth2授权失败回调
+    const handleOAuth2Error = (error: string) => {
+        setShowOAuth2Popup(false)
+        setGettingGmailAuth(false)
+        onError?.(error)
     }
 
     // 解析单个账户文本
@@ -265,6 +386,11 @@ export default function AddAccountModal({
                 email_address: singleForm.email,
                 auth_type: singleForm.authType,
                 mail_provider_id: selectedProvider
+            }
+
+            // 如果使用OAuth2且有指定的配置ID，则添加到payload中
+            if (singleForm.authType === 'oauth2' && singleForm.oauth2ProviderConfigId) {
+                payload.oauth2_provider_id = singleForm.oauth2ProviderConfigId
             }
 
             if (singleForm.authType === 'password') {
@@ -380,7 +506,8 @@ export default function AddAccountModal({
                 proxyUsername: '',
                 proxyPassword: '',
                 isDomainMail: false,
-                domain: ''
+                domain: '',
+                oauth2ProviderConfigId: undefined
             })
             setBatchText('')
             setBatchAccounts([])
@@ -484,15 +611,20 @@ export default function AddAccountModal({
                                     ) : (
                                         <select
                                             value={selectedProvider || ''}
-                                            onChange={(e) => {
+                                            onChange={async (e) => {
                                                 const id = parseInt(e.target.value)
                                                 setSelectedProvider(id)
                                                 // 根据提供商类型设置默认认证方式
                                                 const provider = providers.find(p => p.id === id)
                                                 if (provider?.type === 'outlook') {
-                                                    setSingleForm(prev => ({ ...prev, authType: 'oauth2' }))
+                                                    setSingleForm(prev => ({ ...prev, authType: 'oauth2', oauth2ProviderConfigId: undefined }))
                                                 } else {
-                                                    setSingleForm(prev => ({ ...prev, authType: 'password' }))
+                                                    setSingleForm(prev => ({ ...prev, authType: 'password', oauth2ProviderConfigId: undefined }))
+                                                }
+
+                                                // 加载对应的OAuth2配置
+                                                if (provider) {
+                                                    await loadOAuth2Configs(provider.type)
                                                 }
                                             }}
                                             className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
@@ -651,6 +783,40 @@ export default function AddAccountModal({
                                                     {/* OAuth2 输入 */}
                                                     {singleForm.authType === 'oauth2' && (
                                                         <>
+                                                            {/* OAuth2 配置选择器 */}
+                                                            {(getSelectedProvider()?.type === 'gmail' || getSelectedProvider()?.type === 'outlook') && oauth2Configs.length > 0 && (
+                                                                <div className="mb-4">
+                                                                    <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                                        OAuth2 配置
+                                                                    </label>
+                                                                    {loadingOAuth2Configs ? (
+                                                                        <div className="flex items-center space-x-2 text-gray-500 p-3 border border-gray-300 rounded-lg">
+                                                                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"></div>
+                                                                            <span>加载配置中...</span>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <select
+                                                                            value={singleForm.oauth2ProviderConfigId || ''}
+                                                                            onChange={(e) => setSingleForm({ ...singleForm, oauth2ProviderConfigId: e.target.value ? parseInt(e.target.value) : undefined })}
+                                                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+                                                                            required
+                                                                        >
+                                                                            <option value="">请选择OAuth2配置</option>
+                                                                            {oauth2Configs.map(config => (
+                                                                                <option key={config.id} value={config.id}>
+                                                                                    {config.name} ({config.client_id ? `${config.client_id.substring(0, 8)}...` : 'N/A'})
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                    )}
+                                                                    {oauth2Configs.length === 0 && !loadingOAuth2Configs && (
+                                                                        <div className="mt-2 text-sm text-yellow-600 dark:text-yellow-400">
+                                                                            没有找到可用的OAuth2配置，请先在OAuth2配置页面添加配置
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+
                                                             {/* Gmail OAuth2 获取授权 */}
                                                             {getSelectedProvider()?.type === 'gmail' && (
                                                                 <div className="mb-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4">
@@ -1034,6 +1200,17 @@ export default function AddAccountModal({
                     </div>
                 </div>
             </div>
+
+            {/* OAuth2 Popup 授权组件 */}
+            {showOAuth2Popup && selectedProvider && (
+                <OAuth2PopupAuth
+                    provider={getSelectedProvider()?.type.toLowerCase() as any}
+                    configId={singleForm.oauth2ProviderConfigId}
+                    onSuccess={handleOAuth2Success}
+                    onCancel={handleOAuth2Cancel}
+                    onError={handleOAuth2Error}
+                />
+            )}
         </div>
         , modalRoot)
 }

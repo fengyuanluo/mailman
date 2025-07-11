@@ -102,15 +102,16 @@ type UpdateAccountRequest struct {
 // CreateAccountRequest represents the request body for creating an email account
 // @Description Request body for creating an email account
 type CreateAccountRequest struct {
-	EmailAddress   string          `json:"emailAddress" binding:"required"`
-	AuthType       models.AuthType `json:"authType" binding:"required"`
-	Password       string          `json:"password,omitempty"`
-	Token          string          `json:"token,omitempty"`
-	MailProviderID uint            `json:"mailProviderId" binding:"required"`
-	Proxy          string          `json:"proxy,omitempty"`
-	IsDomainMail   bool            `json:"isDomainMail"`
-	Domain         string          `json:"domain,omitempty"`
-	CustomSettings models.JSONMap  `json:"customSettings,omitempty"`
+	EmailAddress     string          `json:"emailAddress" binding:"required"`
+	AuthType         models.AuthType `json:"authType" binding:"required"`
+	Password         string          `json:"password,omitempty"`
+	Token            string          `json:"token,omitempty"`
+	MailProviderID   uint            `json:"mailProviderId" binding:"required"`
+	OAuth2ProviderID *uint           `json:"oauth2ProviderId,omitempty"` // 关联特定的OAuth2配置
+	Proxy            string          `json:"proxy,omitempty"`
+	IsDomainMail     bool            `json:"isDomainMail"`
+	Domain           string          `json:"domain,omitempty"`
+	CustomSettings   models.JSONMap  `json:"customSettings,omitempty"`
 }
 
 // EmailSearchRequest represents the request parameters for the /emails endpoint

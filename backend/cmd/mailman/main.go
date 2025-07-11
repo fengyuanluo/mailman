@@ -80,6 +80,7 @@ func main() {
 	triggerRepo := repository.NewTriggerRepository(db)
 	triggerLogRepo := repository.NewTriggerExecutionLogRepository(db)
 	oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(db)
+	oauth2AuthSessionRepo := repository.NewOAuth2AuthSessionRepository(db)
 
 	// Seed default mail providers
 	if err := mailProviderRepo.SeedDefaultProviders(); err != nil {
@@ -92,6 +93,7 @@ func main() {
 	authService := services.NewAuthService(userRepo, userSessionRepo)
 	oauth2Service := services.NewOAuth2Service()
 	oauth2ConfigService := services.NewOAuth2GlobalConfigService(oauth2GlobalConfigRepo)
+	oauth2AuthSessionService := services.NewOAuth2AuthSessionService(oauth2AuthSessionRepo)
 
 	// Initialize activity logger service (singleton)
 	activityLogger := services.GetActivityLogger()
@@ -144,7 +146,7 @@ func main() {
 	triggerHandler := api.NewTriggerAPIHandler(triggerService, triggerRepo, triggerLogRepo)
 
 	// Initialize OAuth2 handler
-	oauth2Handler := api.NewOAuth2Handler(oauth2ConfigService, oauth2Service)
+	oauth2Handler := api.NewOAuth2Handler(oauth2ConfigService, oauth2Service, oauth2AuthSessionService)
 
 	// Initialize default AI prompt templates
 	if err := aiPromptTemplateRepo.InitializeDefaultTemplates(); err != nil {

@@ -13,6 +13,7 @@ import {
     Bot,
     Inbox,
     Bell,
+    Key,
     Plus,
     RefreshCw,
 } from 'lucide-react'
@@ -32,6 +33,7 @@ const tabConfig: Tab[] = [
     // 根据需求隐藏订阅管理菜单项
     // { id: 'subscriptions', name: '订阅管理', icon: Bell },
     { id: 'pickup', name: '取件模板', icon: FileText },
+    { id: 'oauth2-config', name: 'OAuth2 配置', icon: Key },
     { id: 'ai-config', name: 'AI 配置', icon: Bot },
     { id: 'user-sessions', name: '访问令牌', icon: Settings },
     // { id: 'settings', name: '设置', icon: Settings },
@@ -57,6 +59,30 @@ export function TabManager({
     }
 
     const availableTabs = tabConfig.filter(tab => !openTabs.includes(tab.id))
+
+    // 监听切换到邮箱账户管理页面的事件
+    useEffect(() => {
+        const handleSwitchToAccountsTab = (event: CustomEvent) => {
+            // 如果邮箱账户管理tab未打开，则打开它
+            if (!openTabs.includes('accounts')) {
+                onTabOpen('accounts')
+            }
+            // 切换到邮箱账户管理tab
+            onTabChange('accounts')
+            
+            // 通知邮箱账户管理页面进行过滤
+            const filterEvent = new CustomEvent('filterAccountsByProvider', {
+                detail: event.detail
+            })
+            window.dispatchEvent(filterEvent)
+        }
+
+        window.addEventListener('switchToAccountsTab', handleSwitchToAccountsTab as EventListener)
+
+        return () => {
+            window.removeEventListener('switchToAccountsTab', handleSwitchToAccountsTab as EventListener)
+        }
+    }, [openTabs, onTabOpen, onTabChange])
 
     return (
         <div className="flex h-14 items-center border-b border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">

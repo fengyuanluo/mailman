@@ -38,17 +38,18 @@ func NewOAuth2Service() *OAuth2Service {
 
 // RefreshAccessToken refreshes the access token using refresh token (legacy method for Outlook)
 func (s *OAuth2Service) RefreshAccessToken(clientID, refreshToken string) (string, error) {
-	return s.RefreshAccessTokenForProvider("outlook", clientID, refreshToken)
+	// Legacy method - assumes empty client_secret for backward compatibility
+	return s.RefreshAccessTokenForProvider("outlook", clientID, "", refreshToken)
 }
 
 // RefreshAccessTokenForProvider refreshes the access token for a specific provider
-func (s *OAuth2Service) RefreshAccessTokenForProvider(providerType string, clientID, refreshToken string) (string, error) {
+func (s *OAuth2Service) RefreshAccessTokenForProvider(providerType string, clientID, clientSecret, refreshToken string) (string, error) {
 	var tokenURL, scope string
 
 	switch providerType {
 	case "gmail":
 		tokenURL = "https://oauth2.googleapis.com/token"
-		scope = "https://mail.google.com/"
+		scope = "https://mail.google.com/ https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile"
 	case "outlook":
 		tokenURL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 		scope = "https://outlook.office.com/IMAP.AccessAsUser.All offline_access"
@@ -62,6 +63,7 @@ func (s *OAuth2Service) RefreshAccessTokenForProvider(providerType string, clien
 
 	data := url.Values{}
 	data.Set("client_id", clientID)
+	data.Set("client_secret", clientSecret)
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", refreshToken)
 	data.Set("scope", scope)
@@ -130,11 +132,11 @@ func (s *OAuth2Service) RefreshAccessTokenForProvider(providerType string, clien
 // GenerateAuthURL generates OAuth2 authorization URL for a provider
 func (s *OAuth2Service) GenerateAuthURL(providerType string, clientID, redirectURI, state string) (string, error) {
 	var authURL, scope string
-	
+
 	switch providerType {
 	case "gmail":
 		authURL = "https://accounts.google.com/o/oauth2/auth"
-		scope = "https://mail.google.com/"
+		scope = "https://mail.google.com/ https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile"
 	case "outlook":
 		authURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
 		scope = "https://outlook.office.com/IMAP.AccessAsUser.All offline_access"
@@ -157,7 +159,7 @@ func (s *OAuth2Service) GenerateAuthURL(providerType string, clientID, redirectU
 // ExchangeCodeForTokens exchanges authorization code for tokens
 func (s *OAuth2Service) ExchangeCodeForTokens(providerType, clientID, clientSecret, code, redirectURI string) (accessToken, refreshToken string, err error) {
 	var tokenURL string
-	
+
 	switch providerType {
 	case "gmail":
 		tokenURL = "https://oauth2.googleapis.com/token"
@@ -239,11 +241,18 @@ func NewOAuth2SASLClient(email, accessToken string) sasl.Client {
 func (c *OAuth2SASLClient) Start() (mech string, ir []byte, err error) {
 	mech = "XOAUTH2"
 	ir = []byte(fmt.Sprintf("user=%s\x01auth=Bearer %s\x01\x01", c.email, c.accessToken))
+	fmt.Printf("OAuth2 SASL: Starting authentication for %s\n", c.email)
+	fmt.Printf("OAuth2 SASL: Access token length: %d\n", len(c.accessToken))
+	fmt.Printf("OAuth2 SASL: Initial response length: %d\n", len(ir))
 	return
 }
 
 // Next continues the SASL authentication
 func (c *OAuth2SASLClient) Next(challenge []byte) (response []byte, err error) {
+	fmt.Printf("OAuth2 SASL: Next called with challenge length: %d\n", len(challenge))
+	if len(challenge) > 0 {
+		fmt.Printf("OAuth2 SASL: Challenge content: %s\n", string(challenge))
+	}
 	// OAuth2 doesn't require additional steps
 	return nil, nil
 }

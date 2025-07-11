@@ -1,15 +1,17 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Settings, Plus, Edit, Trash2, Power, Check, X, AlertCircle, Link, Search, MoreVertical } from 'lucide-react'
+import { Settings, Plus, Edit, Trash2, Power, Check, X, AlertCircle, Link, Search, MoreVertical, HelpCircle, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { oauth2Service } from '@/services/oauth2.service'
-import { OAuth2GlobalConfig, OAuth2ProviderType } from '@/types'
+import { emailAccountService } from '@/services/email-account.service'
+import { OAuth2GlobalConfig, OAuth2ProviderType, EmailAccount } from '@/types'
 import OAuth2ConfigModal from '@/components/modals/oauth2-config-modal'
+import OAuth2HelpModal from '@/components/modals/oauth2-help-modal'
 
 // OAuth2配置卡片组件
 function OAuth2ConfigCard({
@@ -27,6 +29,46 @@ function OAuth2ConfigCard({
 }) {
     const [isToggling, setIsToggling] = useState(false)
     const [isTesting, setIsTesting] = useState(false)
+    const [accountCount, setAccountCount] = useState<number>(0)
+    const [loadingAccounts, setLoadingAccounts] = useState(false)
+
+    // 加载关联的账户数量
+    const loadAccountCount = async () => {
+        try {
+            setLoadingAccounts(true)
+            const accounts = await emailAccountService.getAccounts()
+            
+            // 根据provider_type筛选相关账户
+            const relatedAccounts = accounts.filter(account => {
+                // 检查账户是否使用OAuth2认证且provider类型匹配
+                return account.authType === 'oauth2' &&
+                       account.mailProvider?.type === config.provider_type
+            })
+            
+            setAccountCount(relatedAccounts.length)
+        } catch (error) {
+            console.error('Failed to load account count:', error)
+            setAccountCount(0)
+        } finally {
+            setLoadingAccounts(false)
+        }
+    }
+
+    // 跳转到邮箱账户管理页面并筛选
+    const handleViewAccounts = () => {
+        // 触发自定义事件，通知Tab管理器切换到邮箱账户管理页面
+        const event = new CustomEvent('switchToAccountsTab', {
+            detail: {
+                filterByProvider: config.provider_type
+            }
+        })
+        window.dispatchEvent(event)
+    }
+
+    // 组件加载时获取账户数量
+    useEffect(() => {
+        loadAccountCount()
+    }, [config.id])
 
     const handleToggleEnabled = async () => {
         setIsToggling(true)
@@ -93,7 +135,7 @@ function OAuth2ConfigCard({
                         </Badge>
                     </div>
                 </div>
-                
+
                 {/* 右侧：开关 */}
                 <div className="flex items-center space-x-2">
                     <Switch
@@ -154,6 +196,31 @@ function OAuth2ConfigCard({
                         <Trash2 className="mr-2 h-4 w-4" />
                         删除
                     </Button>
+                </div>
+                
+                {/* 账户数量显示 */}
+                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                    <button
+                        onClick={handleViewAccounts}
+                        disabled={loadingAccounts}
+                        className="w-full flex items-center justify-start p-2 text-sm text-gray-600 hover:text-primary-600 hover:bg-gray-50 rounded-lg transition-colors dark:text-gray-400 dark:hover:text-primary-400 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {loadingAccounts ? (
+                            <>
+                                <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                                <span>加载中...</span>
+                            </>
+                        ) : (
+                            <>
+                                <Users className="mr-2 h-4 w-4" />
+                                <span>关联账户: </span>
+                                <span className="font-semibold text-primary-600 underline decoration-dotted underline-offset-2 hover:decoration-solid dark:text-primary-400 mx-1">
+                                    {accountCount}
+                                </span>
+                                <span>个</span>
+                            </>
+                        )}
+                    </button>
                 </div>
             </div>
 
@@ -227,6 +294,7 @@ export default function OAuth2ConfigTab() {
     const [showModal, setShowModal] = useState(false)
     const [editingConfig, setEditingConfig] = useState<OAuth2GlobalConfig | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
+    const [showHelpModal, setShowHelpModal] = useState(false)
 
     // 加载配置
     const loadConfigs = async () => {
@@ -338,6 +406,25 @@ export default function OAuth2ConfigTab() {
     return (
         <>
             <div className="space-y-6">
+                {/* 页面标题和帮助按钮 */}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">OAuth2 配置</h1>
+                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                            管理邮件提供商的 OAuth2 认证配置
+                        </p>
+                    </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowHelpModal(true)}
+                        className="flex items-center space-x-2"
+                    >
+                        <HelpCircle className="h-4 w-4" />
+                        <span>配置指南</span>
+                    </Button>
+                </div>
+
                 {/* 搜索和操作栏 */}
                 <div className="flex items-center justify-between">
                     <div className="relative w-96">
@@ -431,6 +518,12 @@ export default function OAuth2ConfigTab() {
                     loadConfigs()
                 }}
                 config={editingConfig}
+            />
+
+            {/* OAuth2帮助模态框 */}
+            <OAuth2HelpModal
+                isOpen={showHelpModal}
+                onClose={() => setShowHelpModal(false)}
             />
         </>
     )

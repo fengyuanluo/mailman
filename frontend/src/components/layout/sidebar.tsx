@@ -33,8 +33,7 @@ const navigation = [
     { name: '取件模板', id: 'pickup', icon: FileText },
     // 暂时隐藏触发器管理菜单项
     // { name: '触发器管理', id: 'triggers', icon: Zap },
-    // 暂时隐藏OAuth2配置菜单项
-    // { name: 'OAuth2 配置', id: 'oauth2-config', icon: Key },
+    { name: 'OAuth2 配置', id: 'oauth2-config', icon: Key },
     { name: 'AI 配置', id: 'ai-config', icon: Bot },
     { name: '访问令牌', id: 'user-sessions', icon: Settings },
     // 根据需求隐藏设置菜单项

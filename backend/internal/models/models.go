@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -108,11 +109,34 @@ func (m *JSONMap) Scan(value interface{}) error {
 		*m = make(map[string]string)
 		return nil
 	}
+
+	// Debug: Log the value type and content
+	fmt.Printf("[DEBUG JSONMap.Scan] value type: %T, value: %v\n", value, value)
+
 	bytes, ok := value.([]byte)
 	if !ok {
+		// Try string type as well
+		if str, isString := value.(string); isString {
+			bytes = []byte(str)
+			fmt.Printf("[DEBUG JSONMap.Scan] Converted string to bytes: %s\n", string(bytes))
+		} else {
+			fmt.Printf("[DEBUG JSONMap.Scan] Cannot convert value to bytes, type: %T\n", value)
+			return fmt.Errorf("cannot convert value to bytes, got type %T", value)
+		}
+	}
+
+	if len(bytes) == 0 {
+		*m = make(map[string]string)
 		return nil
 	}
-	return json.Unmarshal(bytes, m)
+
+	if err := json.Unmarshal(bytes, m); err != nil {
+		fmt.Printf("[DEBUG JSONMap.Scan] JSON unmarshal error: %v, bytes: %s\n", err, string(bytes))
+		return err
+	}
+
+	fmt.Printf("[DEBUG JSONMap.Scan] Successfully parsed JSON: %+v\n", *m)
+	return nil
 }
 
 // Value implements the driver.Valuer interface
@@ -125,23 +149,25 @@ func (m JSONMap) Value() (driver.Value, error) {
 
 // EmailAccount represents a user's email account credentials and settings.
 type EmailAccount struct {
-	ID             uint         `gorm:"primaryKey" json:"id"`
-	EmailAddress   string       `gorm:"uniqueIndex;not null;type:varchar(255)" json:"emailAddress"`
-	AuthType       AuthType     `gorm:"not null;default:'password'" json:"authType"`
-	Password       string       `json:"password,omitempty"` // For AuthTypePassword
-	Token          string       `json:"token,omitempty"`    // For AuthTypeToken
-	MailProviderID uint         `gorm:"not null" json:"mailProviderId"`
-	MailProvider   MailProvider `gorm:"foreignKey:MailProviderID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"mailProvider"`
-	Proxy          string       `json:"proxy,omitempty"` // e.g., "socks5://user:pass@host:port"
-	IsDomainMail   bool         `gorm:"default:false" json:"isDomainMail"`
-	Domain         string       `gorm:"index" json:"domain,omitempty"` // For domain-specific email
-	CustomSettings JSONMap      `gorm:"type:json" json:"customSettings"`
-	LastSyncAt     *time.Time   `json:"lastSyncAt,omitempty"`
-	IsVerified     bool         `gorm:"default:false" json:"isVerified"`
-	VerifiedAt     *time.Time   `json:"verifiedAt,omitempty"`
-	CreatedAt      time.Time    `json:"createdAt"`
-	UpdatedAt      time.Time    `json:"updatedAt"`
-	DeletedAt      DeletedAt    `gorm:"index" json:"deletedAt,omitempty"`
+	ID               uint                `gorm:"primaryKey" json:"id"`
+	EmailAddress     string              `gorm:"uniqueIndex;not null;type:varchar(255)" json:"emailAddress"`
+	AuthType         AuthType            `gorm:"not null;default:'password'" json:"authType"`
+	Password         string              `json:"password,omitempty"` // For AuthTypePassword
+	Token            string              `json:"token,omitempty"`    // For AuthTypeToken
+	MailProviderID   uint                `gorm:"not null" json:"mailProviderId"`
+	MailProvider     MailProvider        `gorm:"foreignKey:MailProviderID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"mailProvider"`
+	OAuth2ProviderID *uint               `gorm:"index" json:"oauth2ProviderId,omitempty"`                                                                    // For OAuth2 authentication, references OAuth2GlobalConfig
+	OAuth2Provider   *OAuth2GlobalConfig `gorm:"foreignKey:OAuth2ProviderID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"oauth2Provider,omitempty"` // OAuth2配置关联
+	Proxy            string              `json:"proxy,omitempty"`                                                                                            // e.g., "socks5://user:pass@host:port"
+	IsDomainMail     bool                `gorm:"default:false" json:"isDomainMail"`
+	Domain           string              `gorm:"index" json:"domain,omitempty"` // For domain-specific email
+	CustomSettings   JSONMap             `gorm:"type:json" json:"customSettings"`
+	LastSyncAt       *time.Time          `json:"lastSyncAt,omitempty"`
+	IsVerified       bool                `gorm:"default:false" json:"isVerified"`
+	VerifiedAt       *time.Time          `json:"verifiedAt,omitempty"`
+	CreatedAt        time.Time           `json:"createdAt"`
+	UpdatedAt        time.Time           `json:"updatedAt"`
+	DeletedAt        DeletedAt           `gorm:"index" json:"deletedAt,omitempty"`
 }
 
 // Email represents a single email message.
@@ -311,7 +337,8 @@ type AIGeneratedTemplate struct {
 // OAuth2GlobalConfig represents global OAuth2 configuration for different providers
 type OAuth2GlobalConfig struct {
 	ID           uint             `gorm:"primaryKey" json:"id"`
-	ProviderType MailProviderType `gorm:"type:varchar(50);not null;uniqueIndex" json:"provider_type"`
+	Name         string           `gorm:"uniqueIndex;type:varchar(255)" json:"name"`   // 配置名称，用于区分不同的OAuth2配置
+	ProviderType MailProviderType `gorm:"type:varchar(50);not null;index" json:"provider_type"` // 去掉唯一约束，改为普通索引
 	ClientID     string           `gorm:"not null" json:"client_id"`
 	ClientSecret string           `gorm:"not null" json:"client_secret"`
 	RedirectURI  string           `gorm:"not null" json:"redirect_uri"`

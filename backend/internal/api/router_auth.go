@@ -29,6 +29,9 @@ func NewRouterWithAuth(handler *APIHandler, openAIHandler *OpenAIHandler, authHa
 	// Authentication endpoints (public)
 	apiRouter.HandleFunc("/auth/login", authHandler.LoginHandler).Methods("POST")
 
+	// OAuth2 callback endpoints (public - called by external providers)
+	apiRouter.HandleFunc("/oauth2/callback/{provider}", oauth2Handler.HandleCallback).Methods("GET")
+
 	// Public WebSocket endpoints (no auth required)
 	apiRouter.HandleFunc("/ws/wait-email", handler.WaitEmailWebSocketHandler).Methods("GET")
 
@@ -175,13 +178,19 @@ func NewRouterWithAuth(handler *APIHandler, openAIHandler *OpenAIHandler, authHa
 	authRouter.HandleFunc("/oauth2/global-config", oauth2Handler.CreateOrUpdateGlobalConfig).Methods("POST", "PUT")
 	authRouter.HandleFunc("/oauth2/global-configs", oauth2Handler.GetGlobalConfigs).Methods("GET")
 	authRouter.HandleFunc("/oauth2/global-config/{provider}", oauth2Handler.GetGlobalConfigByProvider).Methods("GET")
+	authRouter.HandleFunc("/oauth2/global-configs/{provider}", oauth2Handler.GetGlobalConfigsByProvider).Methods("GET")
+	authRouter.HandleFunc("/oauth2/global-config/by-id/{id}", oauth2Handler.GetGlobalConfigByID).Methods("GET")
 	authRouter.HandleFunc("/oauth2/global-config/{id}", oauth2Handler.DeleteGlobalConfig).Methods("DELETE")
 	authRouter.HandleFunc("/oauth2/auth-url/{provider}", oauth2Handler.GetAuthURL).Methods("GET")
-	authRouter.HandleFunc("/oauth2/callback/{provider}", oauth2Handler.HandleCallback).Methods("GET")
 	authRouter.HandleFunc("/oauth2/exchange-token", oauth2Handler.ExchangeToken).Methods("POST")
 	authRouter.HandleFunc("/oauth2/refresh-token", oauth2Handler.RefreshTokenHandler).Methods("POST")
 	authRouter.HandleFunc("/oauth2/provider/{provider}/enable", oauth2Handler.EnableProvider).Methods("POST")
 	authRouter.HandleFunc("/oauth2/provider/{provider}/disable", oauth2Handler.DisableProvider).Methods("POST")
+
+	// OAuth2 授权会话管理端点 (protected)
+	authRouter.HandleFunc("/oauth2/session/start/{provider}", oauth2Handler.StartOAuth2Session).Methods("POST")
+	authRouter.HandleFunc("/oauth2/session/poll/{state}", oauth2Handler.PollOAuth2SessionStatus).Methods("GET")
+	authRouter.HandleFunc("/oauth2/session/cancel/{state}", oauth2Handler.CancelOAuth2Session).Methods("POST")
 
 	// Swagger documentation (public)
 	router.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)

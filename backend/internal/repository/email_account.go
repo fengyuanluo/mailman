@@ -19,6 +19,11 @@ func NewEmailAccountRepository(db *gorm.DB) *EmailAccountRepository {
 	return &EmailAccountRepository{db: db}
 }
 
+// GetDB returns the database connection
+func (r *EmailAccountRepository) GetDB() *gorm.DB {
+	return r.db
+}
+
 // Create creates a new email account
 func (r *EmailAccountRepository) Create(account *models.EmailAccount) error {
 	return r.db.Create(account).Error

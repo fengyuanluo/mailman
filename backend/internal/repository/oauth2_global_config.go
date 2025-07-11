@@ -48,6 +48,26 @@ func (r *OAuth2GlobalConfigRepository) GetByProviderType(providerType models.Mai
 	return &config, nil
 }
 
+// GetByName retrieves an OAuth2 global config by name
+func (r *OAuth2GlobalConfigRepository) GetByName(name string) (*models.OAuth2GlobalConfig, error) {
+	var config models.OAuth2GlobalConfig
+	err := r.db.Where("name = ? AND is_enabled = ?", name, true).First(&config).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("OAuth2 global config not found")
+		}
+		return nil, err
+	}
+	return &config, nil
+}
+
+// GetByProviderTypeAll retrieves all OAuth2 global configs by provider type
+func (r *OAuth2GlobalConfigRepository) GetByProviderTypeAll(providerType models.MailProviderType) ([]models.OAuth2GlobalConfig, error) {
+	var configs []models.OAuth2GlobalConfig
+	err := r.db.Where("provider_type = ? AND is_enabled = ?", providerType, true).Find(&configs).Error
+	return configs, err
+}
+
 // GetAll retrieves all OAuth2 global configs
 func (r *OAuth2GlobalConfigRepository) GetAll() ([]models.OAuth2GlobalConfig, error) {
 	var configs []models.OAuth2GlobalConfig

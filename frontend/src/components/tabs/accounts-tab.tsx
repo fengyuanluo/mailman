@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Plus, Search, MoreVertical, Edit2, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle, Grid, List, Table, ChevronLeft, ChevronRight, Shield, ShieldCheck, Mail, Inbox } from 'lucide-react'
+import { Plus, Search, MoreVertical, Edit2, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle, Grid, List, Table, ChevronLeft, ChevronRight, Shield, ShieldCheck, Mail, Inbox, ChevronDown, X } from 'lucide-react'
 import { emailAccountService } from '@/services/email-account.service'
+import { oauth2Service } from '@/services/oauth2.service'
 import { EmailAccount } from '@/types'
 import { cn } from '@/lib/utils'
 import AddAccountModal from '@/components/modals/add-account-modal'
@@ -115,9 +116,54 @@ export default function AccountsTab() {
         totalPages: 0
     })
 
+    // 下拉菜单状态
+    const [showAddDropdown, setShowAddDropdown] = useState(false)
+    const [gmailOAuth2Available, setGmailOAuth2Available] = useState(false)
+
+    // 模态框预设参数
+    const [modalPresets, setModalPresets] = useState<{
+        provider?: string
+        authType?: string
+        autoTriggerOAuth2?: boolean
+    }>({})
+
+    // 过滤器状态
+    const [providerFilter, setProviderFilter] = useState<string | null>(null)
+
     useEffect(() => {
         loadAccounts()
+        checkGmailOAuth2Availability()
     }, [pagination.page, pagination.limit])
+
+    // 监听来自OAuth2配置页面的过滤事件
+    useEffect(() => {
+        const handleFilterAccountsByProvider = (event: CustomEvent) => {
+            const { filterByProvider } = event.detail
+            setProviderFilter(filterByProvider)
+            // 重置搜索查询以避免冲突
+            setSearchQuery('')
+            // 重置分页到第一页
+            setPagination(prev => ({ ...prev, page: 1 }))
+        }
+
+        window.addEventListener('filterAccountsByProvider', handleFilterAccountsByProvider as EventListener)
+
+        return () => {
+            window.removeEventListener('filterAccountsByProvider', handleFilterAccountsByProvider as EventListener)
+        }
+    }, [])
+
+    // 检测Gmail OAuth2配置可用性
+    const checkGmailOAuth2Availability = async () => {
+        try {
+            const configs = await oauth2Service.getGlobalConfigs()
+            const gmailConfig = configs.find(config => config.provider_type === 'gmail')
+            setGmailOAuth2Available(!!gmailConfig && gmailConfig.is_enabled)
+        } catch (error) {
+            console.error('Failed to check Gmail OAuth2 availability:', error)
+            setGmailOAuth2Available(false)
+        }
+    }
 
     const loadAccounts = async () => {
         try {
@@ -205,6 +251,40 @@ export default function AccountsTab() {
         setPagination(prev => ({ ...prev, page }))
     }
 
+    // 处理Gmail OAuth2快捷创建
+    const handleGmailOAuth2QuickCreate = () => {
+        setModalPresets({
+            provider: 'gmail',
+            authType: 'oauth2',
+            autoTriggerOAuth2: true
+        })
+        setShowAddModal(true)
+        setShowAddDropdown(false)
+    }
+
+    // 处理普通添加账户
+    const handleRegularAddAccount = () => {
+        setModalPresets({})
+        setShowAddModal(true)
+        setShowAddDropdown(false)
+    }
+
+    // 处理点击外部关闭下拉菜单
+    const handleClickOutside = (event: MouseEvent) => {
+        const target = event.target as HTMLElement
+        if (!target.closest('.add-account-dropdown')) {
+            setShowAddDropdown(false)
+        }
+    }
+
+    // 监听点击外部事件
+    useEffect(() => {
+        if (showAddDropdown) {
+            document.addEventListener('click', handleClickOutside)
+            return () => document.removeEventListener('click', handleClickOutside)
+        }
+    }, [showAddDropdown])
+
     // 添加处理查看邮件和取件的函数
     const handleViewEmails = (account: EmailAccount) => {
         console.log('[AccountsTab] 触发查看邮件，账户:', account.emailAddress, 'ID:', account.id);
@@ -239,9 +319,17 @@ export default function AccountsTab() {
     }
 
     // 过滤和分页账户
-    const filteredAccounts = accounts.filter(account =>
-        account.emailAddress.toLowerCase().includes(searchQuery.toLowerCase())
-    )
+    const filteredAccounts = accounts.filter(account => {
+        // 搜索查询过滤
+        const matchesSearch = account.emailAddress.toLowerCase().includes(searchQuery.toLowerCase())
+
+        // Provider过滤
+        const matchesProvider = providerFilter
+            ? account.authType === 'oauth2' && account.mailProvider?.type === providerFilter
+            : true
+
+        return matchesSearch && matchesProvider
+    })
 
     // 应用分页
     const paginatedAccounts = filteredAccounts.slice(
@@ -289,15 +377,31 @@ export default function AccountsTab() {
             <div className="space-y-6">
                 {/* 搜索和操作栏 */}
                 <div className="flex items-center justify-between">
-                    <div className="relative w-96">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                        <input
-                            type="text"
-                            placeholder="搜索邮箱账户..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-4 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                        />
+                    <div className="w-96">
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            <input
+                                type="text"
+                                placeholder="搜索邮箱账户..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-4 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+                            />
+                        </div>
+                        {/* 过滤器指示器 */}
+                        {providerFilter && (
+                            <div className="mt-2 flex items-center space-x-2">
+                                <span className="inline-flex items-center rounded-full bg-primary-100 px-3 py-1 text-sm font-medium text-primary-800 dark:bg-primary-900/20 dark:text-primary-400">
+                                    过滤: {providerFilter.toUpperCase()} OAuth2 账户
+                                    <button
+                                        onClick={() => setProviderFilter(null)}
+                                        className="ml-2 rounded-full p-0.5 hover:bg-primary-200 dark:hover:bg-primary-800"
+                                    >
+                                        <X className="h-3 w-3" />
+                                    </button>
+                                </span>
+                            </div>
+                        )}
                     </div>
                     <div className="flex items-center space-x-3">
                         {/* 视图切换按钮 */}
@@ -340,14 +444,45 @@ export default function AccountsTab() {
                             </button>
                         </div>
 
-                        {/* 添加账户按钮 */}
-                        <button
-                            onClick={() => setShowAddModal(true)}
-                            className="flex items-center space-x-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"
-                        >
-                            <Plus className="h-4 w-4" />
-                            <span>添加账户</span>
-                        </button>
+                        {/* 添加账户下拉菜单 */}
+                        <div className="add-account-dropdown relative">
+                            <button
+                                onClick={() => setShowAddDropdown(!showAddDropdown)}
+                                className="flex items-center space-x-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"
+                            >
+                                <Plus className="h-4 w-4" />
+                                <span>添加账户</span>
+                                <ChevronDown className="h-4 w-4" />
+                            </button>
+
+                            {showAddDropdown && (
+                                <div className="absolute right-0 mt-2 w-56 rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none dark:bg-gray-800 dark:ring-gray-700 z-50">
+                                    <button
+                                        onClick={handleRegularAddAccount}
+                                        className="flex w-full items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                                    >
+                                        <Plus className="mr-3 h-4 w-4" />
+                                        <div className="flex flex-col items-start">
+                                            <span>添加账户</span>
+                                            <span className="text-xs text-gray-500 dark:text-gray-400">手动配置邮箱账户</span>
+                                        </div>
+                                    </button>
+
+                                    {gmailOAuth2Available && (
+                                        <button
+                                            onClick={handleGmailOAuth2QuickCreate}
+                                            className="flex w-full items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                                        >
+                                            <Mail className="mr-3 h-4 w-4 text-red-500" />
+                                            <div className="flex flex-col items-start">
+                                                <span>快速添加 Gmail</span>
+                                                <span className="text-xs text-gray-500 dark:text-gray-400">使用 OAuth2 一键授权</span>
+                                            </div>
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -743,11 +878,18 @@ export default function AccountsTab() {
             {/* 添加账户模态框 */}
             <AddAccountModal
                 isOpen={showAddModal}
-                onClose={() => setShowAddModal(false)}
+                onClose={() => {
+                    setShowAddModal(false)
+                    setModalPresets({})
+                }}
                 onSuccess={() => {
                     setShowAddModal(false)
+                    setModalPresets({})
                     loadAccounts()
                 }}
+                presetProvider={modalPresets.provider}
+                presetAuthType={modalPresets.authType}
+                autoTriggerOAuth2={modalPresets.autoTriggerOAuth2}
             />
 
             {/* 编辑账户模态框 */}

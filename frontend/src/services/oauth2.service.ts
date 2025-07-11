@@ -51,6 +51,26 @@ export class OAuth2Service {
     }
 
     /**
+     * 获取特定提供商类型的所有OAuth2配置
+     */
+    async getGlobalConfigsByProvider(provider: OAuth2ProviderType): Promise<OAuth2GlobalConfig[]> {
+        const response = await apiClient.get<OAuth2GlobalConfig[]>(
+            `${this.basePath}/global-configs/${provider}`
+        );
+        return response;
+    }
+
+    /**
+     * 通过ID获取OAuth2配置
+     */
+    async getGlobalConfigById(id: number): Promise<OAuth2GlobalConfig> {
+        const response = await apiClient.get<OAuth2GlobalConfig>(
+            `${this.basePath}/global-config/by-id/${id}`
+        );
+        return response;
+    }
+
+    /**
      * 删除OAuth2全局配置
      */
     async deleteGlobalConfig(id: number): Promise<void> {
@@ -60,9 +80,11 @@ export class OAuth2Service {
     /**
      * 生成OAuth2授权URL
      */
-    async getAuthUrl(provider: OAuth2ProviderType): Promise<OAuth2AuthUrlResponse> {
+    async getAuthUrl(provider: OAuth2ProviderType, configId?: number): Promise<OAuth2AuthUrlResponse> {
+        const params = configId ? { config_id: configId } : {};
         const response = await apiClient.get<OAuth2AuthUrlResponse>(
-            `${this.basePath}/auth-url/${provider}`
+            `${this.basePath}/auth-url/${provider}`,
+            { params }
         );
         return response;
     }
@@ -152,9 +174,9 @@ export class OAuth2Service {
     getDefaultScopes(provider: OAuth2ProviderType): string[] {
         const defaultScopes = {
             gmail: [
-                'https://www.googleapis.com/auth/gmail.readonly',
-                'https://www.googleapis.com/auth/gmail.send',
-                'https://www.googleapis.com/auth/gmail.modify'
+                'https://mail.google.com/',
+                'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/userinfo.profile'
             ],
             outlook: [
                 'https://graph.microsoft.com/mail.read',
@@ -163,6 +185,75 @@ export class OAuth2Service {
             ]
         };
         return defaultScopes[provider] || [];
+    }
+
+    /**
+     * 获取Gmail的固定作用域（受保护，不可编辑）
+     */
+    getGmailProtectedScopes(): string[] {
+        return [
+            'https://mail.google.com/',
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile'
+        ];
+    }
+
+    /**
+     * 检查提供商是否具有受保护的作用域
+     */
+    hasProtectedScopes(provider: OAuth2ProviderType): boolean {
+        return provider === 'gmail';
+    }
+
+    /**
+     * 启动OAuth2授权会话（用于popup方式）
+     */
+    async startAuthSession(provider: OAuth2ProviderType, configId?: number): Promise<{ sessionId: number; state: string; authUrl: string; expiresAt: number }> {
+        const url = configId
+            ? `${this.basePath}/session/start/${provider}?config_id=${configId}`
+            : `${this.basePath}/session/start/${provider}`;
+
+        const response = await apiClient.post<{ session_id: number; state: string; auth_url: string; expires_at: number }>(url);
+        return {
+            sessionId: response.session_id,
+            state: response.state,
+            authUrl: response.auth_url,
+            expiresAt: response.expires_at
+        };
+    }
+
+    /**
+     * 轮询OAuth2授权会话状态
+     */
+    async pollAuthSessionStatus(state: string): Promise<{
+        status: string;
+        expiresAt: number;
+        emailAddress?: string;
+        customSettings?: any;
+        errorMsg?: string
+    }> {
+        const response = await apiClient.get<{
+            status: string;
+            expires_at: number;
+            emailAddress?: string;
+            customSettings?: any;
+            error_msg?: string
+        }>(`${this.basePath}/session/poll/${state}`);
+
+        return {
+            status: response.status,
+            expiresAt: response.expires_at,
+            emailAddress: response.emailAddress,
+            customSettings: response.customSettings,
+            errorMsg: response.error_msg
+        };
+    }
+
+    /**
+     * 取消OAuth2授权会话
+     */
+    async cancelAuthSession(state: string): Promise<void> {
+        await apiClient.post(`${this.basePath}/session/cancel/${state}`);
     }
 
     /**

@@ -21,6 +21,9 @@ func NewOAuth2GlobalConfigService(repo *repository.OAuth2GlobalConfigRepository)
 // CreateOrUpdateConfig creates or updates OAuth2 global configuration
 func (s *OAuth2GlobalConfigService) CreateOrUpdateConfig(config *models.OAuth2GlobalConfig) error {
 	// Validate required fields
+	if config.Name == "" {
+		return fmt.Errorf("name is required")
+	}
 	if config.ProviderType == "" {
 		return fmt.Errorf("provider type is required")
 	}
@@ -38,18 +41,55 @@ func (s *OAuth2GlobalConfigService) CreateOrUpdateConfig(config *models.OAuth2Gl
 	if len(config.Scopes) == 0 {
 		switch config.ProviderType {
 		case models.ProviderTypeGmail:
-			config.Scopes = models.StringSlice{"https://mail.google.com/"}
+			config.Scopes = models.StringSlice{"https://mail.google.com/", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"}
 		case models.ProviderTypeOutlook:
 			config.Scopes = models.StringSlice{"https://outlook.office.com/IMAP.AccessAsUser.All", "offline_access"}
 		}
 	}
 
-	return s.repo.CreateOrUpdate(config)
+	return s.repo.Create(config)
 }
 
-// GetConfigByProvider retrieves OAuth2 configuration for a specific provider
+// GetConfigByID retrieves OAuth2 configuration by ID
+func (s *OAuth2GlobalConfigService) GetConfigByID(id uint) (*models.OAuth2GlobalConfig, error) {
+	return s.repo.GetByID(id)
+}
+
+// GetConfigByName retrieves OAuth2 configuration by name
+func (s *OAuth2GlobalConfigService) GetConfigByName(name string) (*models.OAuth2GlobalConfig, error) {
+	return s.repo.GetByName(name)
+}
+
+// GetConfigByProvider retrieves OAuth2 configuration for a specific provider (backward compatibility)
 func (s *OAuth2GlobalConfigService) GetConfigByProvider(providerType models.MailProviderType) (*models.OAuth2GlobalConfig, error) {
 	return s.repo.GetByProviderType(providerType)
+}
+
+// GetConfigsByProviderType retrieves all OAuth2 configurations for a specific provider type
+func (s *OAuth2GlobalConfigService) GetConfigsByProviderType(providerType models.MailProviderType) ([]models.OAuth2GlobalConfig, error) {
+	return s.repo.GetByProviderTypeAll(providerType)
+}
+
+// UpdateConfig updates an existing OAuth2 configuration
+func (s *OAuth2GlobalConfigService) UpdateConfig(config *models.OAuth2GlobalConfig) error {
+	// Validate required fields
+	if config.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if config.ProviderType == "" {
+		return fmt.Errorf("provider type is required")
+	}
+	if config.ClientID == "" {
+		return fmt.Errorf("client ID is required")
+	}
+	if config.ClientSecret == "" {
+		return fmt.Errorf("client secret is required")
+	}
+	if config.RedirectURI == "" {
+		return fmt.Errorf("redirect URI is required")
+	}
+
+	return s.repo.Update(config)
 }
 
 // GetAllConfigs retrieves all OAuth2 configurations

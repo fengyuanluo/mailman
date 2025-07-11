@@ -78,7 +78,8 @@ func Initialize(config Config) error {
 
 // Migrate runs database migrations
 func Migrate() error {
-	return DB.AutoMigrate(
+	// 首先迁移除了OAuth2GlobalConfig之外的所有表
+	if err := DB.AutoMigrate(
 		&models.MailProvider{},
 		&models.EmailAccount{},
 		&models.Email{},
@@ -97,8 +98,42 @@ func Migrate() error {
 		&models.ActivityLog{},
 		&models.EmailTrigger{},
 		&models.TriggerExecutionLog{},
-		&models.OAuth2GlobalConfig{},
-	)
+		&models.OAuth2AuthSession{},
+	); err != nil {
+		return fmt.Errorf("failed to migrate tables: %w", err)
+	}
+
+	// 单独处理OAuth2GlobalConfig的迁移
+	if err := migrateOAuth2GlobalConfig(); err != nil {
+		return fmt.Errorf("failed to migrate OAuth2GlobalConfig: %w", err)
+	}
+
+	return nil
+}
+
+// migrateOAuth2GlobalConfig 处理OAuth2GlobalConfig的完整迁移
+func migrateOAuth2GlobalConfig() error {
+	// 检查表是否存在
+	if !DB.Migrator().HasTable(&models.OAuth2GlobalConfig{}) {
+		// 表不存在，直接创建
+		return DB.AutoMigrate(&models.OAuth2GlobalConfig{})
+	}
+
+	// 检查name字段是否存在
+	if !DB.Migrator().HasColumn(&models.OAuth2GlobalConfig{}, "name") {
+		// 添加name字段（允许为空）
+		if err := DB.Exec("ALTER TABLE o_auth2_global_configs ADD COLUMN name TEXT").Error; err != nil {
+			return fmt.Errorf("failed to add name column: %w", err)
+		}
+
+		// 为现有记录更新name字段
+		if err := DB.Exec("UPDATE o_auth2_global_configs SET name = 'Default ' || provider_type || ' Config' WHERE name IS NULL OR name = ''").Error; err != nil {
+			return fmt.Errorf("failed to update name field for existing records: %w", err)
+		}
+	}
+
+	// 检查是否需要更新其他字段
+	return DB.AutoMigrate(&models.OAuth2GlobalConfig{})
 }
 
 // GetDB returns the database instance

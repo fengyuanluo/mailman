@@ -243,15 +243,16 @@ func (h *APIHandler) CreateAccountHandler(w http.ResponseWriter, r *http.Request
 
 	// Convert request to model
 	account := models.EmailAccount{
-		EmailAddress:   request.EmailAddress,
-		AuthType:       request.AuthType,
-		Password:       request.Password,
-		Token:          request.Token,
-		MailProviderID: request.MailProviderID,
-		Proxy:          request.Proxy,
-		IsDomainMail:   request.IsDomainMail,
-		Domain:         request.Domain,
-		CustomSettings: request.CustomSettings,
+		EmailAddress:     request.EmailAddress,
+		AuthType:         request.AuthType,
+		Password:         request.Password,
+		Token:            request.Token,
+		MailProviderID:   request.MailProviderID,
+		OAuth2ProviderID: request.OAuth2ProviderID,
+		Proxy:            request.Proxy,
+		IsDomainMail:     request.IsDomainMail,
+		Domain:           request.Domain,
+		CustomSettings:   request.CustomSettings,
 	}
 
 	if err := h.EmailAccountRepo.Create(&account); err != nil {
@@ -824,6 +825,12 @@ func (h *APIHandler) VerifyAccountHandler(w http.ResponseWriter, r *http.Request
 			return
 		}
 		account = *existingAccount
+
+		// Debug: Log the loaded CustomSettings
+		fmt.Printf("[DEBUG] Loaded account CustomSettings: %+v\n", account.CustomSettings)
+		if len(account.CustomSettings) == 0 {
+			fmt.Printf("[DEBUG] CustomSettings is empty for account %d\n", account.ID)
+		}
 	} else {
 		// Create a temporary account object from the provided details
 		if req.EmailAddress == "" || req.MailProviderID == 0 {

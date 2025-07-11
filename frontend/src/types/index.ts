@@ -477,6 +477,7 @@ export interface OAuth2TokenExchangeRequest {
     provider: OAuth2ProviderType
     code: string
     state: string
+    config_id?: number  // Optional: specific OAuth2 config to use
 }
 
 export interface OAuth2TokenResponse {
@@ -490,6 +491,7 @@ export interface OAuth2TokenResponse {
 export interface OAuth2RefreshTokenRequest {
     provider: OAuth2ProviderType
     refresh_token: string
+    config_id?: number  // Optional: specific OAuth2 config to use
 }
 
 

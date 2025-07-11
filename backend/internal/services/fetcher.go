@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -332,9 +334,40 @@ func (s *FetcherService) fetchEmailsFromServer(account models.EmailAccount, opti
 			return nil, fmt.Errorf("refresh_token not found in custom settings")
 		}
 
-		// Refresh access token
-		s.logger.Debug("Refreshing OAuth2 access token")
-		accessToken, err := s.oauth2Service.RefreshAccessToken(clientID, refreshToken)
+		// Get client_secret from global OAuth2 config (secure approach)
+		clientSecret := ""
+		oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
+		
+		var config *models.OAuth2GlobalConfig
+		var err error
+		
+		// Priority 1: Use OAuth2ProviderID if available (new multi-config support)
+		if account.OAuth2ProviderID != nil && *account.OAuth2ProviderID > 0 {
+			s.logger.Debug("Using OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
+			config, err = oauth2GlobalConfigRepo.GetByID(*account.OAuth2ProviderID)
+			if err == nil && config != nil {
+				clientSecret = config.ClientSecret
+				s.logger.Debug("Retrieved client_secret from OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
+			} else {
+				s.logger.Warn("Failed to get config from OAuth2ProviderID %d for account %s: %v", *account.OAuth2ProviderID, account.EmailAddress, err)
+			}
+		}
+		
+		// Priority 2: Fallback to provider type lookup (backward compatibility)
+		if config == nil {
+			s.logger.Debug("Falling back to provider type lookup for %s", account.MailProvider.Type)
+			config, err = oauth2GlobalConfigRepo.GetByProviderType(account.MailProvider.Type)
+			if err == nil && config != nil {
+				clientSecret = config.ClientSecret
+				s.logger.Debug("Retrieved client_secret from provider type %s for account %s", account.MailProvider.Type, account.EmailAddress)
+			} else {
+				s.logger.Warn("Failed to get client_secret from provider type %s for account %s: %v", account.MailProvider.Type, account.EmailAddress, err)
+			}
+		}
+
+		// Refresh access token - use provider-specific method
+		s.logger.Debug("Refreshing OAuth2 access token for provider: %s", account.MailProvider.Type)
+		accessToken, err := s.oauth2Service.RefreshAccessTokenForProvider(string(account.MailProvider.Type), clientID, clientSecret, refreshToken)
 		if err != nil {
 			s.logger.Error("Failed to refresh access token: %v", err)
 			return nil, fmt.Errorf("failed to refresh access token: %w", err)
@@ -701,9 +734,40 @@ func (s *FetcherService) GetMailboxes(account models.EmailAccount) ([]models.Mai
 			return nil, fmt.Errorf("refresh_token not found in custom settings")
 		}
 
-		// Refresh access token
-		s.logger.Debug("Refreshing OAuth2 access token")
-		accessToken, err := s.oauth2Service.RefreshAccessToken(clientID, refreshToken)
+		// Get client_secret from global OAuth2 config (secure approach)
+		clientSecret := ""
+		oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
+		
+		var config *models.OAuth2GlobalConfig
+		var err error
+		
+		// Priority 1: Use OAuth2ProviderID if available (new multi-config support)
+		if account.OAuth2ProviderID != nil && *account.OAuth2ProviderID > 0 {
+			s.logger.Debug("Using OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
+			config, err = oauth2GlobalConfigRepo.GetByID(*account.OAuth2ProviderID)
+			if err == nil && config != nil {
+				clientSecret = config.ClientSecret
+				s.logger.Debug("Retrieved client_secret from OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
+			} else {
+				s.logger.Warn("Failed to get config from OAuth2ProviderID %d for account %s: %v", *account.OAuth2ProviderID, account.EmailAddress, err)
+			}
+		}
+		
+		// Priority 2: Fallback to provider type lookup (backward compatibility)
+		if config == nil {
+			s.logger.Debug("Falling back to provider type lookup for %s", account.MailProvider.Type)
+			config, err = oauth2GlobalConfigRepo.GetByProviderType(account.MailProvider.Type)
+			if err == nil && config != nil {
+				clientSecret = config.ClientSecret
+				s.logger.Debug("Retrieved client_secret from provider type %s for account %s", account.MailProvider.Type, account.EmailAddress)
+			} else {
+				s.logger.Warn("Failed to get client_secret from provider type %s for account %s: %v", account.MailProvider.Type, account.EmailAddress, err)
+			}
+		}
+
+		// Refresh access token - use provider-specific method
+		s.logger.Debug("Refreshing OAuth2 access token for provider: %s", account.MailProvider.Type)
+		accessToken, err := s.oauth2Service.RefreshAccessTokenForProvider(string(account.MailProvider.Type), clientID, clientSecret, refreshToken)
 		if err != nil {
 			s.logger.Error("Failed to refresh access token: %v", err)
 			return nil, fmt.Errorf("failed to refresh access token: %w", err)
@@ -972,6 +1036,13 @@ func convertAddresses(addresses []*imap.Address) models.StringSlice {
 func (s *FetcherService) VerifyConnection(account models.EmailAccount) error {
 	s.logger.Info("VerifyConnection called for account %s", account.EmailAddress)
 
+	// For Gmail OAuth2 accounts, use Gmail API instead of IMAP
+	if account.AuthType == models.AuthTypeOAuth2 && account.MailProvider.Type == models.ProviderTypeGmail {
+		s.logger.Debug("Using Gmail API verification for OAuth2 account")
+		return s.verifyGmailOAuth2Connection(account)
+	}
+
+	// For other accounts, use IMAP verification
 	var c *client.Client
 	var err error
 
@@ -1063,10 +1134,18 @@ func (s *FetcherService) VerifyConnection(account models.EmailAccount) error {
 	case models.AuthTypeOAuth2:
 		// OAuth2 authentication
 		s.logger.Debug("Using OAuth2 authentication")
+		s.logger.Debug("CustomSettings content: %+v", account.CustomSettings)
 		// Get client_id and refresh_token from CustomSettings
 		clientID, ok := account.CustomSettings["client_id"]
 		if !ok {
 			s.logger.Error("client_id not found in custom settings")
+			s.logger.Error("Available keys in CustomSettings: %v", func() []string {
+				keys := make([]string, 0, len(account.CustomSettings))
+				for k := range account.CustomSettings {
+					keys = append(keys, k)
+				}
+				return keys
+			}())
 			return fmt.Errorf("client_id not found in custom settings")
 		}
 
@@ -1076,9 +1155,39 @@ func (s *FetcherService) VerifyConnection(account models.EmailAccount) error {
 			return fmt.Errorf("refresh_token not found in custom settings")
 		}
 
-		// Refresh access token
-		s.logger.Debug("Refreshing OAuth2 access token")
-		accessToken, err := s.oauth2Service.RefreshAccessToken(clientID, refreshToken)
+		// Get client_secret from global OAuth2 config (secure approach)
+		clientSecret := ""
+		oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
+
+		var config *models.OAuth2GlobalConfig
+		var err error
+
+		// First try to get config by OAuth2ProviderID if it exists
+		if account.OAuth2ProviderID != nil {
+			s.logger.Debug("Using OAuth2ProviderID %d to get config", *account.OAuth2ProviderID)
+			config, err = oauth2GlobalConfigRepo.GetByID(*account.OAuth2ProviderID)
+			if err != nil {
+				s.logger.Warn("Failed to get config by OAuth2ProviderID %d: %v", *account.OAuth2ProviderID, err)
+			}
+		}
+
+		// Fallback to provider type based lookup for backward compatibility
+		if config == nil {
+			s.logger.Debug("Falling back to provider type based lookup for: %s", account.MailProvider.Type)
+			config, err = oauth2GlobalConfigRepo.GetByProviderType(account.MailProvider.Type)
+			if err != nil {
+				s.logger.Warn("Failed to get client_secret from global config for provider %s: %v", account.MailProvider.Type, err)
+			}
+		}
+
+		if config != nil {
+			clientSecret = config.ClientSecret
+			s.logger.Debug("Retrieved client_secret from global config (ID: %d, Name: %s)", config.ID, config.Name)
+		}
+
+		// Refresh access token - use provider-specific method
+		s.logger.Debug("Refreshing OAuth2 access token for provider: %s", account.MailProvider.Type)
+		accessToken, err := s.oauth2Service.RefreshAccessTokenForProvider(string(account.MailProvider.Type), clientID, clientSecret, refreshToken)
 		if err != nil {
 			s.logger.Error("Failed to refresh access token: %v", err)
 			return fmt.Errorf("failed to refresh access token: %w", err)
@@ -1106,5 +1215,125 @@ func (s *FetcherService) VerifyConnection(account models.EmailAccount) error {
 	}
 
 	s.logger.Info("Connection verification successful for %s", account.EmailAddress)
+	return nil
+}
+
+// verifyGmailOAuth2Connection verifies Gmail OAuth2 connection using Gmail API
+func (s *FetcherService) verifyGmailOAuth2Connection(account models.EmailAccount) error {
+	s.logger.Info("Verifying Gmail OAuth2 connection for %s", account.EmailAddress)
+
+	// Get OAuth2 configuration
+	oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
+	
+	var oauth2Config *models.OAuth2GlobalConfig
+	var err error
+	
+	// First try to get config by OAuth2ProviderID if it exists
+	if account.OAuth2ProviderID != nil {
+		s.logger.Debug("Using OAuth2ProviderID %d to get config for Gmail verification", *account.OAuth2ProviderID)
+		oauth2Config, err = oauth2GlobalConfigRepo.GetByID(*account.OAuth2ProviderID)
+		if err != nil {
+			s.logger.Warn("Failed to get config by OAuth2ProviderID %d: %v", *account.OAuth2ProviderID, err)
+		}
+	}
+	
+	// Fallback to provider type based lookup for backward compatibility
+	if oauth2Config == nil {
+		s.logger.Debug("Falling back to provider type based lookup for Gmail")
+		oauth2Config, err = oauth2GlobalConfigRepo.GetByProviderType(models.ProviderTypeGmail)
+		if err != nil {
+			s.logger.Error("Failed to get OAuth2 config: %v", err)
+			return fmt.Errorf("failed to get OAuth2 config: %w", err)
+		}
+	}
+	
+	if oauth2Config == nil {
+		s.logger.Error("No OAuth2 config found")
+		return fmt.Errorf("no OAuth2 config found")
+	}
+	
+	s.logger.Debug("Using OAuth2 config: ID=%d, Name=%s", oauth2Config.ID, oauth2Config.Name)
+
+	// Get tokens from CustomSettings
+	if account.CustomSettings == nil {
+		s.logger.Error("CustomSettings is nil for account %s", account.EmailAddress)
+		return fmt.Errorf("OAuth2 tokens not found")
+	}
+
+	accessToken, ok := account.CustomSettings["access_token"]
+	if !ok || accessToken == "" {
+		s.logger.Error("access_token not found in CustomSettings")
+		return fmt.Errorf("access_token not found")
+	}
+
+	refreshToken, ok := account.CustomSettings["refresh_token"]
+	if !ok || refreshToken == "" {
+		s.logger.Error("refresh_token not found in CustomSettings")
+		return fmt.Errorf("refresh_token not found")
+	}
+
+	// Try to refresh token first to ensure it's valid
+	s.logger.Debug("Refreshing OAuth2 access token for Gmail verification")
+	newAccessToken, err := s.oauth2Service.RefreshAccessTokenForProvider(
+		"gmail",
+		oauth2Config.ClientID,
+		oauth2Config.ClientSecret,
+		refreshToken,
+	)
+	if err != nil {
+		s.logger.Error("Failed to refresh token: %v", err)
+		return fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	// Use the refreshed token
+	accessToken = newAccessToken
+	s.logger.Debug("Token refreshed successfully")
+
+	// Test connection by making a direct HTTP request to Gmail API
+	s.logger.Debug("Testing Gmail API connection by getting labels list")
+	req, err := http.NewRequest("GET", "https://gmail.googleapis.com/gmail/v1/users/me/labels", nil)
+	if err != nil {
+		s.logger.Error("Failed to create HTTP request: %v", err)
+		return fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		s.logger.Error("Failed to make HTTP request: %v", err)
+		return fmt.Errorf("Gmail API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		s.logger.Error("Gmail API returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("Gmail API verification failed with status %d", resp.StatusCode)
+	}
+
+	// Parse the response to get labels count
+	var labelsResponse struct {
+		Labels []struct {
+			Id   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"labels"`
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		s.logger.Error("Failed to read response body: %v", err)
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	err = json.Unmarshal(body, &labelsResponse)
+	if err != nil {
+		s.logger.Error("Failed to parse JSON response: %v", err)
+		return fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
+	s.logger.Info("Gmail OAuth2 connection verified successfully for %s, found %d labels", account.EmailAddress, len(labelsResponse.Labels))
 	return nil
 }

@@ -17,15 +17,17 @@ import (
 
 // OAuth2Handler handles OAuth2 related API endpoints
 type OAuth2Handler struct {
-	configService *services.OAuth2GlobalConfigService
-	oauth2Service *services.OAuth2Service
+	configService      *services.OAuth2GlobalConfigService
+	oauth2Service      *services.OAuth2Service
+	authSessionService *services.OAuth2AuthSessionService
 }
 
 // NewOAuth2Handler creates a new OAuth2Handler
-func NewOAuth2Handler(configService *services.OAuth2GlobalConfigService, oauth2Service *services.OAuth2Service) *OAuth2Handler {
+func NewOAuth2Handler(configService *services.OAuth2GlobalConfigService, oauth2Service *services.OAuth2Service, authSessionService *services.OAuth2AuthSessionService) *OAuth2Handler {
 	return &OAuth2Handler{
-		configService: configService,
-		oauth2Service: oauth2Service,
+		configService:      configService,
+		oauth2Service:      oauth2Service,
+		authSessionService: authSessionService,
 	}
 }
 
@@ -53,6 +55,11 @@ func (h *OAuth2Handler) CreateOrUpdateGlobalConfig(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// 强制Gmail使用固定scope，不允许用户编辑
+	if config.ProviderType == models.ProviderTypeGmail {
+		config.Scopes = models.StringSlice{"https://mail.google.com/", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"}
+	}
+
 	if err := h.configService.CreateOrUpdateConfig(&config); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -74,7 +81,7 @@ func (h *OAuth2Handler) GetGlobalConfigs(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(configs)
 }
 
-// GetGlobalConfigByProvider retrieves OAuth2 global configuration by provider
+// GetGlobalConfigByProvider retrieves OAuth2 global configuration by provider (backward compatibility)
 func (h *OAuth2Handler) GetGlobalConfigByProvider(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	providerType := vars["provider"]
@@ -91,6 +98,53 @@ func (h *OAuth2Handler) GetGlobalConfigByProvider(w http.ResponseWriter, r *http
 	}
 
 	config, err := h.configService.GetConfigByProvider(mailProviderType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(config)
+}
+
+// GetGlobalConfigsByProvider retrieves all OAuth2 global configurations by provider type
+func (h *OAuth2Handler) GetGlobalConfigsByProvider(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	providerType := vars["provider"]
+
+	var mailProviderType models.MailProviderType
+	switch providerType {
+	case "gmail":
+		mailProviderType = models.ProviderTypeGmail
+	case "outlook":
+		mailProviderType = models.ProviderTypeOutlook
+	default:
+		http.Error(w, "unsupported provider type", http.StatusBadRequest)
+		return
+	}
+
+	configs, err := h.configService.GetConfigsByProviderType(mailProviderType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(configs)
+}
+
+// GetGlobalConfigByID retrieves OAuth2 global configuration by ID
+func (h *OAuth2Handler) GetGlobalConfigByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		http.Error(w, "invalid ID format", http.StatusBadRequest)
+		return
+	}
+
+	config, err := h.configService.GetConfigByID(uint(id))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -185,10 +239,38 @@ func (h *OAuth2Handler) GetAuthURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := h.configService.GetProviderConfig(mailProviderType)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	// Check for optional config_id parameter
+	configIDParam := r.URL.Query().Get("config_id")
+
+	var config *models.OAuth2GlobalConfig
+	var err error
+
+	// Priority 1: Use specific config ID if provided (new multi-config support)
+	if configIDParam != "" {
+		configID, err := strconv.ParseUint(configIDParam, 10, 32)
+		if err != nil {
+			http.Error(w, "invalid config_id parameter", http.StatusBadRequest)
+			return
+		}
+
+		config, err = h.configService.GetConfigByID(uint(configID))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("OAuth2 config not found: %v", err), http.StatusNotFound)
+			return
+		}
+
+		// Verify config provider type matches
+		if config.ProviderType != mailProviderType {
+			http.Error(w, fmt.Sprintf("config provider type mismatch: expected %s, got %s", mailProviderType, config.ProviderType), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// Priority 2: Fallback to default provider type lookup (backward compatibility)
+		config, err = h.configService.GetProviderConfig(mailProviderType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Generate state for security
@@ -227,20 +309,156 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 
-	// Verify state
-	stateCookie, err := r.Cookie("oauth2_state")
-	if err != nil || stateCookie.Value != state {
-		http.Error(w, "invalid state parameter", http.StatusBadRequest)
+	if state == "" {
+		http.Error(w, "missing state parameter", http.StatusBadRequest)
 		return
 	}
 
-	// Clear state cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:   "oauth2_state",
-		Value:  "",
-		MaxAge: -1,
-		Path:   "/",
-	})
+	// 验证会话状态
+	session, err := h.authSessionService.GetSessionByState(state)
+	if err != nil {
+		fmt.Printf("Failed to get session by state: %v\n", err)
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "invalid session")
+		http.Error(w, "invalid session", http.StatusBadRequest)
+		return
+	}
+
+	// 检查会话是否已过期
+	if session.IsExpired() {
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusExpired, "session expired")
+		http.Error(w, "session expired", http.StatusGone)
+		return
+	}
+
+	// 检查会话状态
+	if session.Status != models.OAuth2AuthSessionStatusPending {
+		http.Error(w, "session already processed", http.StatusConflict)
+		return
+	}
+
+	var mailProviderType models.MailProviderType
+	switch providerType {
+	case "gmail":
+		mailProviderType = models.ProviderTypeGmail
+	case "outlook":
+		mailProviderType = models.ProviderTypeOutlook
+	default:
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "unsupported provider type")
+		http.Error(w, "unsupported provider type", http.StatusBadRequest)
+		return
+	}
+
+	// Use the OAuth2 config from the session (which supports multi-config)
+	config, err := h.configService.GetConfigByID(session.ProviderID)
+	if err != nil {
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "provider config not found")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Verify the config provider type matches the callback provider type
+	if config.ProviderType != mailProviderType {
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "provider type mismatch")
+		http.Error(w, "provider type mismatch", http.StatusBadRequest)
+		return
+	}
+
+	// 交换授权码获取令牌
+	accessToken, refreshToken, err := h.oauth2Service.ExchangeCodeForTokens(
+		providerType,
+		config.ClientID,
+		config.ClientSecret,
+		code,
+		config.RedirectURI,
+	)
+	if err != nil {
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, fmt.Sprintf("token exchange failed: %v", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 获取用户邮箱信息
+	var userEmail string
+	var userInfo models.JSONMap
+
+	if providerType == "gmail" {
+		fmt.Printf("开始获取Gmail用户信息，access_token: %s\n", accessToken[:20]+"...")
+
+		userInfoResp, err := http.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + accessToken)
+		if err != nil {
+			fmt.Printf("获取用户信息请求失败: %v\n", err)
+			h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "failed to get user info")
+			http.Error(w, "failed to get user info", http.StatusInternalServerError)
+			return
+		}
+		defer userInfoResp.Body.Close()
+
+		if userInfoResp.StatusCode == 200 {
+			var responseData map[string]interface{}
+			if err := json.NewDecoder(userInfoResp.Body).Decode(&responseData); err != nil {
+				fmt.Printf("解析响应失败: %v\n", err)
+				h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "failed to parse user info")
+				http.Error(w, "failed to parse user info", http.StatusInternalServerError)
+				return
+			}
+
+			fmt.Printf("API响应数据: %+v\n", responseData)
+
+			// 提取邮箱
+			if email, ok := responseData["email"]; ok && email != nil {
+				userEmail = email.(string)
+				fmt.Printf("从UserInfo API获取邮箱: %s\n", userEmail)
+			}
+
+			// 保存完整用户信息，转换为JSONMap格式
+			userInfo = make(models.JSONMap)
+			for k, v := range responseData {
+				if v != nil {
+					userInfo[k] = fmt.Sprintf("%v", v)
+				}
+			}
+		} else {
+			h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "user info API error")
+			http.Error(w, "user info API error", http.StatusInternalServerError)
+			return
+		}
+		fmt.Printf("最终获取的邮箱地址: %s\n", userEmail)
+	}
+
+	// 更新会话状态为成功，并保存认证数据
+	err = h.authSessionService.CompleteAuthFlow(
+		state,
+		userEmail,
+		accessToken,
+		refreshToken,
+		"Bearer",
+		time.Now().Add(time.Hour).Unix(),
+		userInfo,
+	)
+	if err != nil {
+		fmt.Printf("Failed to complete auth flow: %v\n", err)
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusFailed, "failed to save auth data")
+		http.Error(w, "failed to save auth data", http.StatusInternalServerError)
+		return
+	}
+
+	// 构建前端重定向URL
+	frontendUrl := "http://localhost:3000"
+	if frontendEnv := r.Header.Get("X-Frontend-URL"); frontendEnv != "" {
+		frontendUrl = frontendEnv
+	}
+
+	// 重定向到成功页面，携带state参数用于前端轮询获取结果
+	callbackUrl := fmt.Sprintf("%s/oauth2/success?state=%s&provider=%s", frontendUrl, state, providerType)
+
+	fmt.Printf("重定向到前端成功页面: %s\n", callbackUrl)
+	http.Redirect(w, r, callbackUrl, http.StatusFound)
+}
+
+// StartOAuth2Session 创建OAuth2授权会话并返回授权URL
+func (h *OAuth2Handler) StartOAuth2Session(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	providerType := vars["provider"]
 
 	var mailProviderType models.MailProviderType
 	switch providerType {
@@ -253,41 +471,137 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := h.configService.GetProviderConfig(mailProviderType)
+	// 检查是否指定了特定的配置ID
+	var config *models.OAuth2GlobalConfig
+	var err error
+
+	configIDStr := r.URL.Query().Get("config_id")
+	if configIDStr != "" {
+		// 通过配置ID获取特定的OAuth2配置
+		configID, parseErr := strconv.ParseUint(configIDStr, 10, 32)
+		if parseErr != nil {
+			http.Error(w, "invalid config_id format", http.StatusBadRequest)
+			return
+		}
+
+		config, err = h.configService.GetConfigByID(uint(configID))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("OAuth2 config not found: %v", err), http.StatusNotFound)
+			return
+		}
+
+		// 验证配置类型是否匹配
+		if config.ProviderType != mailProviderType {
+			http.Error(w, fmt.Sprintf("config provider type mismatch: expected %s, got %s", mailProviderType, config.ProviderType), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// 回退到默认的provider type查找
+		config, err = h.configService.GetProviderConfig(mailProviderType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// 生成唯一的state参数
+	state, err := generateRandomString(32)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "failed to generate state", http.StatusInternalServerError)
 		return
 	}
 
-	accessToken, refreshToken, err := h.oauth2Service.ExchangeCodeForTokens(
-		providerType,
-		config.ClientID,
-		config.ClientSecret,
-		code,
-		config.RedirectURI,
-	)
+	// 创建授权会话
+	session, err := h.authSessionService.CreateSession(uint(config.ID), state, 10) // 10分钟过期
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 构建前端重定向URL，包含token信息
-	frontendUrl := "http://localhost:3000" // 可以从环境变量获取
-	if frontendEnv := r.Header.Get("X-Frontend-URL"); frontendEnv != "" {
-		frontendUrl = frontendEnv
+	// 生成授权URL
+	authURL, err := h.oauth2Service.GenerateAuthURL(providerType, config.ClientID, config.RedirectURI, state)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// 创建回调URL，将token信息作为查询参数传递
-	callbackUrl := fmt.Sprintf("%s/oauth2/success?provider=%s&access_token=%s&refresh_token=%s&expires_at=%d",
-		frontendUrl,
-		providerType,
-		accessToken,
-		refreshToken,
-		time.Now().Add(time.Hour).Unix(),
-	)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"session_id": session.ID,
+		"state":      state,
+		"auth_url":   authURL,
+		"expires_at": session.ExpiresAt.Unix(),
+	})
+}
 
-	// 重定向到前端
-	http.Redirect(w, r, callbackUrl, http.StatusFound)
+// PollOAuth2SessionStatus 轮询OAuth2授权会话状态
+func (h *OAuth2Handler) PollOAuth2SessionStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	state := vars["state"]
+
+	if state == "" {
+		http.Error(w, "state parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	session, err := h.authSessionService.GetSessionByState(state)
+	if err != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	// 检查会话是否过期
+	if session.IsExpired() {
+		// 更新状态为expired
+		h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusExpired, "session expired")
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "expired",
+			"error_msg":  "session expired",
+			"expires_at": session.ExpiresAt.Unix(),
+		})
+		return
+	}
+
+	response := map[string]interface{}{
+		"status":     string(session.Status),
+		"expires_at": session.ExpiresAt.Unix(),
+	}
+
+	// 如果授权成功，包含账户信息
+	if session.Status == models.OAuth2AuthSessionStatusSuccess {
+		response["emailAddress"] = session.EmailAddress
+		response["customSettings"] = session.GetCustomSettings()
+	}
+
+	// 如果有错误信息，包含错误
+	if session.ErrorMsg != "" {
+		response["error_msg"] = session.ErrorMsg
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// CancelOAuth2Session 取消OAuth2授权会话
+func (h *OAuth2Handler) CancelOAuth2Session(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	state := vars["state"]
+
+	if state == "" {
+		http.Error(w, "state parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	err := h.authSessionService.UpdateStatus(state, models.OAuth2AuthSessionStatusCancelled, "user cancelled")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "session cancelled successfully"})
 }
 
 // ExchangeToken manually exchanges authorization code for tokens
@@ -296,6 +610,7 @@ func (h *OAuth2Handler) ExchangeToken(w http.ResponseWriter, r *http.Request) {
 		Provider    string `json:"provider"`
 		Code        string `json:"code"`
 		RedirectURI string `json:"redirect_uri"`
+		ConfigID    *uint  `json:"config_id,omitempty"` // Optional: specific OAuth2 config to use
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -319,10 +634,29 @@ func (h *OAuth2Handler) ExchangeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := h.configService.GetProviderConfig(mailProviderType)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	var config *models.OAuth2GlobalConfig
+	var err error
+
+	// Priority 1: Use specific config ID if provided (new multi-config support)
+	if request.ConfigID != nil && *request.ConfigID > 0 {
+		config, err = h.configService.GetConfigByID(*request.ConfigID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("OAuth2 config not found: %v", err), http.StatusNotFound)
+			return
+		}
+
+		// Verify config provider type matches
+		if config.ProviderType != mailProviderType {
+			http.Error(w, fmt.Sprintf("config provider type mismatch: expected %s, got %s", mailProviderType, config.ProviderType), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// Priority 2: Fallback to default provider type lookup (backward compatibility)
+		config, err = h.configService.GetProviderConfig(mailProviderType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	redirectURI := request.RedirectURI
@@ -356,6 +690,7 @@ func (h *OAuth2Handler) RefreshTokenHandler(w http.ResponseWriter, r *http.Reque
 	var request struct {
 		Provider     string `json:"provider"`
 		RefreshToken string `json:"refresh_token"`
+		ConfigID     *uint  `json:"config_id,omitempty"` // Optional: specific OAuth2 config to use
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -379,15 +714,35 @@ func (h *OAuth2Handler) RefreshTokenHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	config, err := h.configService.GetProviderConfig(mailProviderType)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	var config *models.OAuth2GlobalConfig
+	var err error
+
+	// Priority 1: Use specific config ID if provided (new multi-config support)
+	if request.ConfigID != nil && *request.ConfigID > 0 {
+		config, err = h.configService.GetConfigByID(*request.ConfigID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("OAuth2 config not found: %v", err), http.StatusNotFound)
+			return
+		}
+
+		// Verify config provider type matches
+		if config.ProviderType != mailProviderType {
+			http.Error(w, fmt.Sprintf("config provider type mismatch: expected %s, got %s", mailProviderType, config.ProviderType), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// Priority 2: Fallback to default provider type lookup (backward compatibility)
+		config, err = h.configService.GetProviderConfig(mailProviderType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	newAccessToken, err := h.oauth2Service.RefreshAccessTokenForProvider(
 		request.Provider,
 		config.ClientID,
+		config.ClientSecret,
 		request.RefreshToken,
 	)
 	if err != nil {
