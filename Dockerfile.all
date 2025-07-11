@@ -32,8 +32,8 @@ COPY --from=frontend-builder /app/.next/standalone /usr/share/nginx/html
 # Copy nginx configuration for all-in-one
 COPY nginx-all.conf /etc/nginx/nginx.conf
 
-# Copy backend email.txt if exists
-COPY backend/email.txt /app/email.txt
+# Create empty email.txt if needed
+RUN touch /app/email.txt
 
 # Create supervisor configuration
 RUN mkdir -p /etc/supervisor/conf.d
