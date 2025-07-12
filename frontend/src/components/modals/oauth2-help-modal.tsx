@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { X, ExternalLink, Copy, Check, FileText, Globe, Key, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { apiClient } from '@/lib/api-client'
 
 interface OAuth2HelpModalProps {
     isOpen: boolean
@@ -13,6 +14,14 @@ interface OAuth2HelpModalProps {
 export default function OAuth2HelpModal({ isOpen, onClose }: OAuth2HelpModalProps) {
     const [copiedText, setCopiedText] = useState<string | null>(null)
     const [activeTab, setActiveTab] = useState('gmail')
+
+    // 动态生成回调地址
+    const callbackUrls = useMemo(() => {
+        return {
+            gmail: apiClient.getFullUrl('/oauth2/callback/gmail'),
+            outlook: apiClient.getFullUrl('/oauth2/callback/outlook')
+        }
+    }, [])
 
     if (!isOpen) return null
 
@@ -172,41 +181,30 @@ export default function OAuth2HelpModal({ isOpen, onClose }: OAuth2HelpModalProp
                                             <span>配置重定向 URI：</span>
                                         </div>
                                         <div className="bg-gray-50 p-3 rounded-md dark:bg-gray-700">
-                                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">生产环境：</p>
+                                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                                                您当前的回调地址（根据访问域名自动生成）：
+                                            </p>
                                             <div className="flex items-center space-x-2">
                                                 <code className="text-xs bg-gray-100 px-2 py-1 rounded dark:bg-gray-600">
-                                                    https://yourdomain.com/api/oauth2/callback/gmail
+                                                    {callbackUrls.gmail}
                                                 </code>
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    onClick={() => copyToClipboard('https://yourdomain.com/api/oauth2/callback/gmail', 'gmail-prod')}
+                                                    onClick={() => copyToClipboard(callbackUrls.gmail, 'gmail-callback')}
                                                     className="h-6 w-6 p-0"
                                                 >
-                                                    {copiedText === 'gmail-prod' ? (
+                                                    {copiedText === 'gmail-callback' ? (
                                                         <Check className="h-3 w-3 text-green-500" />
                                                     ) : (
                                                         <Copy className="h-3 w-3" />
                                                     )}
                                                 </Button>
                                             </div>
-                                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-2 mt-3">开发环境：</p>
-                                            <div className="flex items-center space-x-2">
-                                                <code className="text-xs bg-gray-100 px-2 py-1 rounded dark:bg-gray-600">
-                                                    http://localhost:8080/api/oauth2/callback/gmail
-                                                </code>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={() => copyToClipboard('http://localhost:8080/api/oauth2/callback/gmail', 'gmail-dev')}
-                                                    className="h-6 w-6 p-0"
-                                                >
-                                                    {copiedText === 'gmail-dev' ? (
-                                                        <Check className="h-3 w-3 text-green-500" />
-                                                    ) : (
-                                                        <Copy className="h-3 w-3" />
-                                                    )}
-                                                </Button>
+                                            <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded dark:bg-blue-900/20 dark:border-blue-800">
+                                                <p className="text-xs text-blue-800 dark:text-blue-200">
+                                                    💡 <strong>架构说明：</strong> 在 docker-compose 和 docker-all-in-one 部署中，Nginx 会将所有 <code>/api</code> 请求代理到后端服务。OAuth2 提供商会回调到后端处理授权，然后由后端重定向到前端页面。
+                                                </p>
                                             </div>
                                         </div>
                                     </div>
@@ -356,22 +354,30 @@ export default function OAuth2HelpModal({ isOpen, onClose }: OAuth2HelpModalProp
                                             <span>配置重定向 URI：</span>
                                         </div>
                                         <div className="bg-gray-50 p-3 rounded-md dark:bg-gray-700">
+                                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                                                您当前的回调地址（根据访问域名自动生成）：
+                                            </p>
                                             <div className="flex items-center space-x-2">
                                                 <code className="text-xs bg-gray-100 px-2 py-1 rounded dark:bg-gray-600">
-                                                    https://yourdomain.com/api/oauth2/callback/outlook
+                                                    {callbackUrls.outlook}
                                                 </code>
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    onClick={() => copyToClipboard('https://yourdomain.com/api/oauth2/callback/outlook', 'outlook-uri')}
+                                                    onClick={() => copyToClipboard(callbackUrls.outlook, 'outlook-callback')}
                                                     className="h-6 w-6 p-0"
                                                 >
-                                                    {copiedText === 'outlook-uri' ? (
+                                                    {copiedText === 'outlook-callback' ? (
                                                         <Check className="h-3 w-3 text-green-500" />
                                                     ) : (
                                                         <Copy className="h-3 w-3" />
                                                     )}
                                                 </Button>
+                                            </div>
+                                            <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded dark:bg-blue-900/20 dark:border-blue-800">
+                                                <p className="text-xs text-blue-800 dark:text-blue-200">
+                                                    💡 <strong>架构说明：</strong> 在 docker-compose 和 docker-all-in-one 部署中，Nginx 会将所有 <code>/api</code> 请求代理到后端服务。OAuth2 提供商会回调到后端处理授权，然后由后端重定向到前端页面。
+                                                </p>
                                             </div>
                                         </div>
                                     </div>
@@ -463,12 +469,12 @@ export default function OAuth2HelpModal({ isOpen, onClose }: OAuth2HelpModalProp
                                         Q2: 重定向 URI 应该设置为什么？
                                     </h4>
                                     <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
-                                        重定向 URI 应该指向您的应用程序的回调端点：
+                                        重定向 URI 应该指向您的应用程序的回调端点（已根据当前访问域名自动生成）：
                                     </p>
                                     <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                                        <li>• Gmail：<code className="bg-gray-100 px-1 rounded dark:bg-gray-600">https://yourdomain.com/api/oauth2/callback/gmail</code></li>
-                                        <li>• Outlook：<code className="bg-gray-100 px-1 rounded dark:bg-gray-600">https://yourdomain.com/api/oauth2/callback/outlook</code></li>
-                                        <li>• 本地开发：将 <code className="bg-gray-100 px-1 rounded dark:bg-gray-600">yourdomain.com</code> 替换为 <code className="bg-gray-100 px-1 rounded dark:bg-gray-600">localhost:8080</code></li>
+                                        <li>• Gmail：<code className="bg-gray-100 px-1 rounded dark:bg-gray-600">{callbackUrls.gmail}</code></li>
+                                        <li>• Outlook：<code className="bg-gray-100 px-1 rounded dark:bg-gray-600">{callbackUrls.outlook}</code></li>
+                                        <li>• 这些地址会根据您的部署环境（生产/开发/本地）自动调整</li>
                                     </ul>
                                 </div>
 
