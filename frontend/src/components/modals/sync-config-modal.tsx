@@ -118,18 +118,15 @@ export default function SyncConfigModal({
     // 预定义的文件夹选项（仅作为最后的后备，优先使用从服务器获取的文件夹）
     const folderOptions = ['INBOX']  // 只保留 INBOX，其他文件夹应该从服务器动态获取
 
-    // 预定义的同步间隔选项
+    // 预定义的同步间隔选项（标签形式）
     const intervalOptions = [
-        { value: 5, label: '5 秒' },
-        { value: 10, label: '10 秒' },
-        { value: 30, label: '30 秒' },
-        { value: 60, label: '1 分钟' },
-        { value: 300, label: '5 分钟' },
-        { value: 600, label: '10 分钟' },
-        { value: 900, label: '15 分钟' },
-        { value: 1800, label: '30 分钟' },
-        { value: 3600, label: '1 小时' },
-        { value: 'custom', label: '自定义' }
+        { value: 5, label: '5s' },
+        { value: 10, label: '10s' },
+        { value: 30, label: '30s' },
+        { value: 60, label: '1min' },
+        { value: 300, label: '5min' },
+        { value: 3600, label: '1h' },
+        { value: 86400, label: '1d' }
     ]
 
     // 处理模态框动画
@@ -277,20 +274,25 @@ export default function SyncConfigModal({
         };
     }, []);
 
-    const handleIntervalChange = (value: string) => {
-        if (value === 'custom') {
-            // 保持当前值，只是切换到自定义模式
-            setCustomInterval(formData.sync_interval.toString())
-        } else {
-            setFormData({ ...formData, sync_interval: parseInt(value) })
-            setCustomInterval('')
-        }
+    const handleIntervalChange = (value: number) => {
+        setFormData({ ...formData, sync_interval: value })
+        setCustomInterval(value.toString()) // 在自定义输入框中回显数值
     }
 
     const handleCustomIntervalChange = (value: string) => {
+        // 只允许输入正整数，不允许负数和小数
+        if (value !== '' && (!/^\d+$/.test(value) || parseInt(value) < 1)) {
+            return // 拒绝输入负数、小数或无效字符
+        }
+
         setCustomInterval(value)
+        // 允许空值，但如果有值则必须是正整数
+        if (value === '') {
+            // 允许为空，但不更新 formData 的 sync_interval
+            return
+        }
         const numValue = parseInt(value)
-        if (!isNaN(numValue) && numValue >= 5) {
+        if (!isNaN(numValue) && numValue >= 1) {
             setFormData({ ...formData, sync_interval: numValue })
         }
     }
@@ -336,22 +338,33 @@ export default function SyncConfigModal({
                 return
             }
 
-            if (formData.sync_interval < 5) {
-                toast.error('同步间隔不能小于5秒')
+            // 检查是否有有效的同步间隔
+            if (customInterval === '' && !formData.sync_interval) {
+                toast.error('请输入同步间隔')
                 return
             }
 
-            if (formData.sync_folders.length === 0) {
-                toast.error('请至少选择一个同步文件夹')
+            // 验证自定义输入的值
+            if (customInterval !== '') {
+                const customValue = parseInt(customInterval)
+                if (isNaN(customValue) || customValue < 1 || !Number.isInteger(customValue)) {
+                    toast.error('同步间隔必须为正整数')
+                    return
+                }
+            }
+
+            // 最终验证 formData 中的值
+            if (formData.sync_interval < 1 || !Number.isInteger(formData.sync_interval)) {
+                toast.error('同步间隔必须为正整数')
                 return
             }
+
 
             let endpoint = ''
             let method = ''
             let body: any = {
                 enable_auto_sync: formData.enable_auto_sync,
-                sync_interval: formData.sync_interval,
-                sync_folders: formData.sync_folders
+                sync_interval: formData.sync_interval
             }
 
             if (mode === 'global') {
@@ -359,8 +372,7 @@ export default function SyncConfigModal({
                 method = 'PUT'
                 body = {
                     default_enable_sync: formData.enable_auto_sync,
-                    default_sync_interval: formData.sync_interval,
-                    default_sync_folders: formData.sync_folders
+                    default_sync_interval: formData.sync_interval
                 }
             } else if (mode === 'create') {
                 endpoint = `/accounts/${selectedAccountId}/sync-config`
@@ -427,9 +439,14 @@ export default function SyncConfigModal({
         }
     }
 
-    const currentIntervalValue = intervalOptions.find(opt => opt.value === formData.sync_interval)
-        ? formData.sync_interval.toString()
-        : 'custom'
+    const isCustomInterval = !intervalOptions.find(opt => opt.value === formData.sync_interval)
+
+    // 检查是否是Gmail OAuth2账户
+    const isGmailOAuth2 = (account: Account | null | undefined) => {
+        if (!account) return false
+        return account.authType === 'oauth2' &&
+            account.mailProvider?.name?.toLowerCase().includes('gmail')
+    }
 
     if (!isVisible) return null
 
@@ -621,143 +638,93 @@ export default function SyncConfigModal({
                         </div>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                         <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                             <Clock className="w-4 h-4 text-gray-400" />
                             同步间隔
                         </label>
-                        <div className="flex gap-2">
-                            <select
-                                value={currentIntervalValue}
-                                onChange={(e) => handleIntervalChange(e.target.value)}
-                                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                            >
+
+                        {/* 自定义输入和预设标签在同一行 */}
+                        <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm text-gray-600 dark:text-gray-400">自定义:</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={customInterval || formData.sync_interval}
+                                    onChange={(e) => handleCustomIntervalChange(e.target.value)}
+                                    className="w-24 rounded-lg border border-gray-300 px-3 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+                                    placeholder="秒"
+                                />
+                                <span className="text-sm text-gray-500 dark:text-gray-400">秒</span>
+                            </div>
+
+                            {/* 预设标签选项 */}
+                            <div className="flex flex-wrap gap-2">
                                 {intervalOptions.map((option) => (
-                                    <option
+                                    <button
                                         key={option.value}
-                                        value={option.value.toString()}
+                                        type="button"
+                                        onClick={() => handleIntervalChange(option.value)}
+                                        className={cn(
+                                            "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
+                                            formData.sync_interval === option.value
+                                                ? "bg-primary-600 text-white hover:bg-primary-700"
+                                                : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                                        )}
                                     >
                                         {option.label}
-                                    </option>
+                                    </button>
                                 ))}
-                            </select>
-                            {currentIntervalValue === 'custom' && (
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="number"
-                                        min="5"
-                                        value={customInterval || formData.sync_interval}
-                                        onChange={(e) => handleCustomIntervalChange(e.target.value)}
-                                        className="w-24 rounded-lg border border-gray-300 px-3 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                        placeholder="秒"
-                                    />
-                                    <span className="text-sm text-gray-500 dark:text-gray-400">秒</span>
-                                </div>
-                            )}
+                            </div>
                         </div>
+
                         <p className="text-sm text-gray-500 dark:text-gray-400">
-                            最小同步间隔为 5 秒
+                            请输入正整数作为同步间隔（秒）
                         </p>
                     </div>
 
-                    <div className="space-y-2">
-                        <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                            <Folder className="w-4 h-4 text-gray-400" />
-                            同步文件夹
-                        </label>
-                        <div className="space-y-4">
-                            {loadingMailboxes ? (
-                                <div className="flex items-center justify-center py-4">
-                                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
-                                    <span className="ml-2 text-sm text-gray-500">加载文件夹中...</span>
-                                </div>
-                            ) : (
-                                <div className="flex flex-wrap gap-2">
-                                    {/* 如果有动态文件夹，使用它们；否则使用预定义的 */}
-                                    {(mailboxes.length > 0 ? mailboxes : folderOptions.map(name => ({ name, is_deleted: false })))
-                                        .filter((folder) => {
-                                            const folderName = typeof folder === 'string' ? folder : folder.name;
-                                            // 过滤掉无效的文件夹
-                                            return folderName !== '[Gmail]' && folderName.trim() !== '';
-                                        })
-                                        .map((folder) => {
-                                            const folderName = typeof folder === 'string' ? folder : folder.name;
-                                            const isDeleted = typeof folder === 'object' && folder.is_deleted;
-                                            const isSelected = formData.sync_folders.includes(folderName);
-
-                                            return (
-                                                <button
-                                                    key={folderName}
-                                                    type="button"
-                                                    onClick={() => !isDeleted && toggleFolder(folderName)}
-                                                    disabled={isDeleted}
-                                                    className={cn(
-                                                        "inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium transition-all",
-                                                        isDeleted
-                                                            ? "bg-gray-100 text-gray-400 line-through cursor-not-allowed dark:bg-gray-800 dark:text-gray-500"
-                                                            : isSelected
-                                                                ? "bg-primary-600 text-white hover:bg-primary-700 hover:scale-105"
-                                                                : "bg-gray-100 text-gray-700 hover:bg-gray-200 hover:scale-105 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-                                                    )}
-                                                    title={isDeleted ? "此文件夹已被删除" : undefined}
-                                                >
-                                                    {isSelected && !isDeleted && (
-                                                        <CheckCircle className="w-3 h-3" />
-                                                    )}
-                                                    {folderName}
-                                                </button>
-                                            );
-                                        })}
-                                </div>
-                            )}
-
-                            {formData.sync_folders.filter(f => !folderOptions.includes(f)).length > 0 && (
+                    {/* Gmail OAuth2 特殊提示 */}
+                    {(mode === 'edit' && isGmailOAuth2(config?.account)) ||
+                        (mode === 'create' && isGmailOAuth2(selectedAccount)) ? (
+                        <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 dark:bg-blue-900/20 dark:border-blue-800">
+                            <div className="flex items-start gap-3">
+                                <Mail className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
                                 <div className="space-y-2">
-                                    <p className="text-sm text-gray-500 dark:text-gray-400">自定义文件夹：</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {formData.sync_folders
-                                            .filter(f => !folderOptions.includes(f))
-                                            .map((folder) => (
-                                                <div key={folder} className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300">
-                                                    {folder}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removeFolder(folder)}
-                                                        className="ml-1 p-0.5 hover:bg-gray-300 dark:hover:bg-gray-500 rounded"
-                                                    >
-                                                        <X className="h-3 w-3" />
-                                                    </button>
-                                                </div>
-                                            ))}
+                                    <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                                        Gmail API 优化同步
+                                    </h4>
+                                    <p className="text-sm text-blue-700 dark:text-blue-300">
+                                        检测到您的Gmail账户使用OAuth2认证，系统将优先使用Gmail API进行轮询同步，以提供更高效和稳定的邮件同步体验。
+                                    </p>
+                                    <div className="text-xs text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 p-2 rounded">
+                                        <div className="font-medium mb-1">Gmail API 配额消耗分析：</div>
+                                        <ul className="space-y-0.5">
+                                            <li>• 同步算法：History API(2配额) + Messages.Get(5配额/邮件)</li>
+                                            <li>• 每分钟20封邮件时：220配额，利用率仅1.47%</li>
+                                            <li>• 每秒1次同步极限：每分钟可处理2976封邮件</li>
+                                            <li>• 每用户每分钟限制：15,000 个配额单位</li>
+                                        </ul>
+                                        <div className="mt-1 text-xs text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 p-1.5 rounded">
+                                            <div className="font-medium">配额计算公式：</div>
+                                            <div>每次同步 = 2 + 5×新邮件数量</div>
+                                            <div>极限计算：(15000-60×2)÷5 = 2976封/分钟</div>
+                                        </div>
+                                        <div className="mt-2 pt-2 border-t border-blue-200 dark:border-blue-700">
+                                            <a
+                                                href="https://developers.google.com/workspace/gmail/api/reference/quota"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-blue-700 dark:text-blue-300 hover:text-blue-800 dark:hover:text-blue-200 underline text-xs"
+                                            >
+                                                📖 查看官方文档
+                                            </a>
+                                        </div>
                                     </div>
                                 </div>
-                            )}
-
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
-                                    value={newFolder}
-                                    onChange={(e) => setNewFolder(e.target.value)}
-                                    placeholder="添加自定义文件夹"
-                                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                    onKeyPress={(e) => {
-                                        if (e.key === 'Enter') {
-                                            e.preventDefault()
-                                            addCustomFolder()
-                                        }
-                                    }}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={addCustomFolder}
-                                    disabled={!newFolder}
-                                    className="rounded-lg border border-gray-300 px-4 py-2 text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-                                >
-                                    <Plus className="h-4 w-4" />
-                                </button>
                             </div>
                         </div>
-                    </div>
+                    ) : null}
                 </div>
 
                 {/* 底部操作栏 */}

@@ -2,6 +2,7 @@ package services
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,10 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"golang.org/x/net/proxy"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/option"
 )
 
 // FetcherService is responsible for fetching emails from an IMAP server.
@@ -91,6 +97,26 @@ func (s *FetcherService) FetchEmailsFromMultipleMailboxes(account models.EmailAc
 	if options.StartDate != nil {
 		s.logger.Debug("Filter StartDate: %s", options.StartDate.Format(time.RFC3339))
 	}
+
+	// 检查是否是Gmail账户
+	isGmailAccount := account.AuthType == "oauth2" && (account.EmailAddress == "" ||
+		strings.Contains(account.EmailAddress, "@gmail.com") ||
+		strings.Contains(account.EmailAddress, "@googlemail.com"))
+
+	if isGmailAccount {
+		// Gmail账户：使用统一的Gmail API同步方法
+		s.logger.Info("Detected Gmail account, using unified Gmail API sync")
+
+		// 为Gmail账户移除日期过滤器，让Gmail History API自己处理增量同步
+		gmailOptions := options
+		gmailOptions.StartDate = nil
+
+		// 直接调用Gmail API统一同步方法
+		return s.fetchEmailsFromGmailAPI(account, gmailOptions)
+	}
+
+	// 非Gmail账户：使用传统的按文件夹分别同步方法
+	s.logger.Info("Non-Gmail account, using traditional folder-by-folder sync")
 
 	var emails []models.Email
 
@@ -231,6 +257,12 @@ func (s *FetcherService) convertSortOption(sortBy string) string {
 
 // fetchEmailsFromServer fetches emails from IMAP server with options
 func (s *FetcherService) fetchEmailsFromServer(account models.EmailAccount, options FetchEmailsOptions) ([]models.Email, error) {
+	// Check if should use Gmail API instead of IMAP
+	if s.shouldUseGmailAPI(account) {
+		s.logger.Debug("Using Gmail API for account %s", account.EmailAddress)
+		return s.fetchEmailsFromGmailAPI(account, options)
+	}
+
 	var c *client.Client
 	var err error
 
@@ -637,13 +669,20 @@ func (s *FetcherService) FetchAndStoreEmails(accountID uint) error {
 func (s *FetcherService) GetMailboxes(account models.EmailAccount) ([]models.Mailbox, error) {
 	s.logger.Info("GetMailboxes called for account %s", account.EmailAddress)
 
-	var c *client.Client
-	var err error
-
 	// Check if MailProvider is nil
 	if account.MailProvider == nil {
 		return nil, fmt.Errorf("mail provider is not configured for account %s", account.EmailAddress)
 	}
+
+	// For Gmail OAuth2 accounts, use Gmail API instead of IMAP
+	if s.shouldUseGmailAPI(account) {
+		s.logger.Debug("Using Gmail API to get mailboxes for OAuth2 account")
+		return s.getGmailMailboxes(account)
+	}
+
+	// For other accounts, use IMAP
+	var c *client.Client
+	var err error
 
 	serverAddr := fmt.Sprintf("%s:%d", account.MailProvider.IMAPServer, account.MailProvider.IMAPPort)
 
@@ -1370,38 +1409,1195 @@ func (s *FetcherService) GetAllFolders(account models.EmailAccount) ([]string, e
 func (s *FetcherService) getGmailFolders(account models.EmailAccount) ([]string, error) {
 	s.logger.Debug("Getting Gmail folders using Gmail API for %s", account.EmailAddress)
 
-	// 简化实现：暂时返回常用的Gmail文件夹
-	// 在真正的实现中，我们应该使用Gmail API获取所有标签
-	commonGmailFolders := []string{
-		"INBOX",
-		"SENT",
-		"DRAFTS",
-		"SPAM",
-		"TRASH",
-		"IMPORTANT",
-		"STARRED",
+	// 使用Gmail API获取标签
+	mailboxes, err := s.getGmailMailboxes(account)
+	if err != nil {
+		s.logger.Error("Failed to get Gmail mailboxes: %v", err)
+		return nil, fmt.Errorf("failed to get Gmail mailboxes: %w", err)
 	}
 
-	s.logger.Info("Returning common Gmail folders for %s: %v", account.EmailAddress, commonGmailFolders)
-	return commonGmailFolders, nil
+	// 转换为文件夹名称列表
+	var folders []string
+	for _, mailbox := range mailboxes {
+		folders = append(folders, mailbox.Name)
+	}
 
+	s.logger.Info("Retrieved %d Gmail labels for %s: %v", len(folders), account.EmailAddress, folders)
+	return folders, nil
 }
 
 // getImapFolders retrieves IMAP folders using IMAP LIST command
 func (s *FetcherService) getImapFolders(account models.EmailAccount) ([]string, error) {
-	s.logger.Debug("Getting IMAP folders for %s", account.EmailAddress)
+	s.logger.Debug("Getting IMAP folders for %s using real IMAP connection", account.EmailAddress)
 
-	// 简化实现：返回常用的IMAP文件夹
-	// 在真正的实现中，我们应该连接到IMAP服务器并获取所有文件夹
-	commonImapFolders := []string{
-		"INBOX",
-		"Sent",
-		"Drafts",
-		"Spam",
-		"Trash",
-		"Archive",
+	// 使用真正的IMAP连接获取文件夹列表
+	c, err := s.connectAndAuthenticateIMAP(account)
+	if err != nil {
+		s.logger.Error("Failed to connect to IMAP server: %v", err)
+		return nil, fmt.Errorf("failed to connect to IMAP server: %w", err)
+	}
+	defer c.Logout()
+
+	// 使用LIST命令获取所有文件夹
+	mailboxes := make(chan *imap.MailboxInfo, 10)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- c.List("", "*", mailboxes)
+	}()
+
+	var folders []string
+	for m := range mailboxes {
+		folders = append(folders, m.Name)
 	}
 
-	s.logger.Info("Returning common IMAP folders for %s: %v", account.EmailAddress, commonImapFolders)
-	return commonImapFolders, nil
+	if err := <-done; err != nil {
+		s.logger.Error("IMAP LIST command failed: %v", err)
+		return nil, fmt.Errorf("IMAP LIST command failed: %w", err)
+	}
+
+	s.logger.Info("Retrieved %d folders from IMAP server for %s: %v", len(folders), account.EmailAddress, folders)
+	return folders, nil
+}
+
+// connectAndAuthenticateIMAP connects to IMAP server and authenticates
+func (s *FetcherService) connectAndAuthenticateIMAP(account models.EmailAccount) (*client.Client, error) {
+	var c *client.Client
+	var err error
+
+	// Check if MailProvider is nil
+	if account.MailProvider == nil {
+		return nil, fmt.Errorf("mail provider is not configured for account %s", account.EmailAddress)
+	}
+
+	serverAddr := fmt.Sprintf("%s:%d", account.MailProvider.IMAPServer, account.MailProvider.IMAPPort)
+	s.logger.Info("Connecting to IMAP server %s for %s", serverAddr, account.EmailAddress)
+
+	if account.Proxy != "" {
+		proxyURL, err := url.Parse(account.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL: %w", err)
+		}
+
+		dialer, err := s.createProxyDialer(proxyURL)
+		if err != nil {
+			s.logger.Error("Failed to create proxy dialer: %v", err)
+			return nil, fmt.Errorf("failed to create proxy dialer: %w", err)
+		}
+
+		s.logger.Debug("Connecting via %s proxy: %s", proxyURL.Scheme, account.Proxy)
+
+		// For IMAP over proxy, we need to handle TLS after CONNECT
+		if account.MailProvider.IMAPPort == 993 {
+			// First establish the proxy tunnel
+			proxyConn, err := dialer.Dial("tcp", serverAddr)
+			if err != nil {
+				s.logger.Error("Failed to dial via proxy: %v", err)
+				return nil, fmt.Errorf("failed to dial via proxy: %w", err)
+			}
+
+			// Then wrap with TLS
+			s.logger.Debug("Establishing TLS connection through proxy tunnel")
+			tlsConn := tls.Client(proxyConn, &tls.Config{
+				ServerName: account.MailProvider.IMAPServer,
+			})
+
+			// Perform TLS handshake
+			if err := tlsConn.Handshake(); err != nil {
+				proxyConn.Close()
+				s.logger.Error("TLS handshake failed: %v", err)
+				return nil, fmt.Errorf("TLS handshake failed: %w", err)
+			}
+
+			// Create IMAP client with the TLS connection
+			c, err = client.New(tlsConn)
+			if err != nil {
+				tlsConn.Close()
+				s.logger.Error("Failed to create IMAP client: %v", err)
+				return nil, fmt.Errorf("failed to create IMAP client: %w", err)
+			}
+		} else {
+			// For non-TLS IMAP, use the proxy connection directly
+			c, err = client.DialWithDialer(dialer, serverAddr)
+			if err != nil {
+				s.logger.Error("Failed to dial via proxy: %v", err)
+				return nil, fmt.Errorf("failed to dial via proxy: %w", err)
+			}
+		}
+	} else {
+		// Use TLS connection for secure IMAP (port 993)
+		if account.MailProvider.IMAPPort == 993 {
+			s.logger.Debug("Using TLS connection for port 993")
+			c, err = client.DialTLS(serverAddr, &tls.Config{ServerName: account.MailProvider.IMAPServer})
+			if err != nil {
+				s.logger.Error("Failed to dial with TLS: %v", err)
+				return nil, fmt.Errorf("failed to dial with TLS: %w", err)
+			}
+		} else {
+			// Use plain connection for non-secure IMAP (port 143)
+			s.logger.Debug("Using plain connection for port %d", account.MailProvider.IMAPPort)
+			c, err = client.Dial(serverAddr)
+			if err != nil {
+				s.logger.Error("Failed to dial: %v", err)
+				return nil, fmt.Errorf("failed to dial: %w", err)
+			}
+		}
+	}
+
+	// Login based on auth type
+	s.logger.Debug("Authenticating with auth type: %s", account.AuthType)
+	switch account.AuthType {
+	case models.AuthTypePassword:
+		// Standard password authentication
+		if err := c.Login(account.EmailAddress, account.Password); err != nil {
+			s.logger.Error("Password authentication failed for %s: %v", account.EmailAddress, err)
+			c.Logout()
+			return nil, fmt.Errorf("login failed: %w", err)
+		}
+	case models.AuthTypeOAuth2:
+		// OAuth2 authentication
+		s.logger.Debug("Using OAuth2 authentication")
+		// Get client_id and refresh_token from CustomSettings
+		clientID, ok := account.CustomSettings["client_id"]
+		if !ok {
+			s.logger.Error("client_id not found in custom settings")
+			c.Logout()
+			return nil, fmt.Errorf("client_id not found in custom settings")
+		}
+
+		refreshToken, ok := account.CustomSettings["refresh_token"]
+		if !ok {
+			s.logger.Error("refresh_token not found in custom settings")
+			c.Logout()
+			return nil, fmt.Errorf("refresh_token not found in custom settings")
+		}
+
+		// Get client_secret from global OAuth2 config (secure approach)
+		clientSecret := ""
+		oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
+
+		var config *models.OAuth2GlobalConfig
+		var err error
+
+		// Priority 1: Use OAuth2ProviderID if available (new multi-config support)
+		if account.OAuth2ProviderID != nil && *account.OAuth2ProviderID > 0 {
+			s.logger.Debug("Using OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
+			config, err = oauth2GlobalConfigRepo.GetByID(*account.OAuth2ProviderID)
+			if err == nil && config != nil {
+				clientSecret = config.ClientSecret
+				s.logger.Debug("Retrieved client_secret from OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
+			} else {
+				s.logger.Warn("Failed to get config from OAuth2ProviderID %d for account %s: %v", *account.OAuth2ProviderID, account.EmailAddress, err)
+			}
+		}
+
+		// Priority 2: Fallback to provider type lookup (backward compatibility)
+		if config == nil {
+			s.logger.Debug("Falling back to provider type lookup for %s", account.MailProvider.Type)
+			config, err = oauth2GlobalConfigRepo.GetByProviderType(account.MailProvider.Type)
+			if err == nil && config != nil {
+				clientSecret = config.ClientSecret
+				s.logger.Debug("Retrieved client_secret from provider type %s for account %s", account.MailProvider.Type, account.EmailAddress)
+			} else {
+				s.logger.Warn("Failed to get client_secret from provider type %s for account %s: %v", account.MailProvider.Type, account.EmailAddress, err)
+			}
+		}
+
+		// Refresh access token - use provider-specific method
+		s.logger.Debug("Refreshing OAuth2 access token for provider: %s", account.MailProvider.Type)
+		accessToken, err := s.oauth2Service.RefreshAccessTokenForProvider(string(account.MailProvider.Type), clientID, clientSecret, refreshToken)
+		if err != nil {
+			s.logger.Error("Failed to refresh access token: %v", err)
+			c.Logout()
+			return nil, fmt.Errorf("failed to refresh access token: %w", err)
+		}
+
+		// Update access token in account
+		if account.CustomSettings == nil {
+			account.CustomSettings = make(models.JSONMap)
+		}
+		account.CustomSettings["access_token"] = accessToken
+
+		// Update the account with new access token
+		updatedAccount := account
+		if err := s.accountRepo.Update(&updatedAccount); err != nil {
+			s.logger.Warn("Failed to update access token in database: %v", err)
+		}
+
+		// Authenticate with OAuth2
+		saslClient := NewOAuth2SASLClient(account.EmailAddress, accessToken)
+		if err := c.Authenticate(saslClient); err != nil {
+			s.logger.Error("OAuth2 authentication failed: %v", err)
+			c.Logout()
+			return nil, fmt.Errorf("OAuth2 authentication failed: %w", err)
+		}
+	default:
+		s.logger.Error("Unsupported auth type: %s", account.AuthType)
+		c.Logout()
+		return nil, fmt.Errorf("unsupported auth type: %s", account.AuthType)
+	}
+
+	s.logger.Info("Successfully connected and logged in for %s using %s auth", account.EmailAddress, account.AuthType)
+	return c, nil
+}
+
+// shouldUseGmailAPI determines if should use Gmail API instead of IMAP
+func (s *FetcherService) shouldUseGmailAPI(account models.EmailAccount) bool {
+	return account.AuthType == models.AuthTypeOAuth2 &&
+		account.MailProvider != nil &&
+		account.MailProvider.Type == models.ProviderTypeGmail
+}
+
+// fetchEmailsFromGmailAPI fetches emails using Gmail API
+func (s *FetcherService) fetchEmailsFromGmailAPI(account models.EmailAccount, options FetchEmailsOptions) ([]models.Email, error) {
+	s.logger.Info("Fetching emails using Gmail API for account %s", account.EmailAddress)
+
+	// Create Gmail API service
+	gmailService, err := s.createGmailService(account)
+	if err != nil {
+		s.logger.Error("Failed to create Gmail service: %v", err)
+		return nil, fmt.Errorf("failed to create Gmail service: %w", err)
+	}
+
+	// Get sync config to check for History ID
+	syncConfigRepo := repository.NewSyncConfigRepository(s.accountRepo.GetDB())
+	syncConfig, err := syncConfigRepo.GetByAccountID(account.ID)
+	if err != nil {
+		s.logger.Warn("Failed to get sync config for account %d: %v", account.ID, err)
+		// Continue with full sync if no config found
+	}
+
+	var emails []models.Email
+	var newHistoryID string
+
+	// Try incremental sync using History API if we have a previous History ID
+	if syncConfig != nil && syncConfig.LastHistoryID != "" {
+		s.logger.Debug("Attempting Gmail unified incremental sync using History ID: %s", syncConfig.LastHistoryID)
+
+		// Use unified Gmail API sync - gets ALL email changes in one call
+		historyEmails, historyID, err := s.fetchGmailHistoryChangesUnified(gmailService, syncConfig.LastHistoryID, account.ID, options)
+		if err != nil {
+			s.logger.Warn("Gmail unified History API sync failed, falling back to full sync: %v", err)
+			// Fall back to full sync
+			messages, err := s.fetchGmailMessagesUnified(gmailService, options)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch Gmail messages (unified): %w", err)
+			}
+			emails = s.convertGmailMessages(messages, account.ID)
+		} else {
+			emails = historyEmails
+			newHistoryID = historyID
+			s.logger.Info("Gmail unified incremental sync completed, found %d changed emails", len(emails))
+		}
+	} else {
+		s.logger.Debug("No previous History ID found, performing Gmail unified full sync")
+		// Full sync for first time or when no history ID available
+		messages, err := s.fetchGmailMessagesUnified(gmailService, options)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch Gmail messages (unified): %w", err)
+		}
+		emails = s.convertGmailMessages(messages, account.ID)
+	}
+
+	// Get current profile to update History ID
+	if newHistoryID == "" {
+		profile, err := gmailService.Users.GetProfile("me").Do()
+		if err != nil {
+			s.logger.Warn("Failed to get user profile for History ID: %v", err)
+		} else {
+			newHistoryID = fmt.Sprintf("%d", profile.HistoryId)
+		}
+	}
+
+	// Update sync config with new History ID
+	if syncConfig != nil && newHistoryID != "" {
+		syncConfig.LastHistoryID = newHistoryID
+		if err := syncConfigRepo.Update(syncConfig); err != nil {
+			s.logger.Warn("Failed to update History ID in sync config: %v", err)
+		} else {
+			s.logger.Debug("Updated History ID to: %s", newHistoryID)
+		}
+	}
+
+	// Update last sync time
+	if err := s.accountRepo.UpdateLastSync(account.ID); err != nil {
+		s.logger.Warn("Failed to update last sync time: %v", err)
+	}
+
+	s.logger.Info("Successfully fetched %d emails from Gmail API for %s", len(emails), account.EmailAddress)
+	return emails, nil
+}
+
+// createGmailService creates a Gmail API service client
+func (s *FetcherService) createGmailService(account models.EmailAccount) (*gmail.Service, error) {
+	// Get OAuth2 configuration
+	oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
+
+	var oauth2Config *models.OAuth2GlobalConfig
+	var err error
+
+	// Priority 1: Use OAuth2ProviderID if available
+	if account.OAuth2ProviderID != nil && *account.OAuth2ProviderID > 0 {
+		s.logger.Debug("Using OAuth2ProviderID %d for Gmail service", *account.OAuth2ProviderID)
+		oauth2Config, err = oauth2GlobalConfigRepo.GetByID(*account.OAuth2ProviderID)
+		if err != nil {
+			s.logger.Warn("Failed to get config from OAuth2ProviderID %d: %v", *account.OAuth2ProviderID, err)
+		}
+	}
+
+	// Priority 2: Fallback to provider type lookup
+	if oauth2Config == nil {
+		s.logger.Debug("Falling back to provider type lookup for Gmail")
+		oauth2Config, err = oauth2GlobalConfigRepo.GetByProviderType(models.ProviderTypeGmail)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OAuth2 config: %w", err)
+		}
+	}
+
+	if oauth2Config == nil {
+		return nil, fmt.Errorf("no OAuth2 config found for Gmail")
+	}
+
+	// Get tokens from CustomSettings
+	if account.CustomSettings == nil {
+		return nil, fmt.Errorf("OAuth2 tokens not found in account settings")
+	}
+
+	accessToken, ok := account.CustomSettings["access_token"]
+	if !ok || accessToken == "" {
+		return nil, fmt.Errorf("access_token not found in account settings")
+	}
+
+	refreshToken, ok := account.CustomSettings["refresh_token"]
+	if !ok || refreshToken == "" {
+		return nil, fmt.Errorf("refresh_token not found in account settings")
+	}
+
+	// Parse token expiry
+	var tokenExpiry time.Time
+	if expiryStr, exists := account.CustomSettings["expires_at"]; exists && expiryStr != "" {
+		if expiryInt, err := strconv.ParseInt(expiryStr, 10, 64); err == nil {
+			tokenExpiry = time.Unix(expiryInt, 0)
+		} else if expiryTime, err := time.Parse(time.RFC3339, expiryStr); err == nil {
+			tokenExpiry = expiryTime
+		}
+	}
+
+	// Check if token is expired and refresh if necessary (使用带缓存和并发控制的方法)
+	if tokenExpiry.IsZero() || time.Now().After(tokenExpiry.Add(-5*time.Minute)) {
+		s.logger.Debug("Access token is expired or about to expire, refreshing token for Gmail API")
+
+		// 使用带缓存和并发控制的token刷新方法
+		newAccessToken, err := s.oauth2Service.RefreshAccessTokenWithCache(
+			string(models.ProviderTypeGmail),
+			oauth2Config.ClientID,
+			oauth2Config.ClientSecret,
+			refreshToken,
+			account.ID,
+		)
+		if err != nil {
+			s.logger.Error("Failed to refresh access token for Gmail API: %v", err)
+			return nil, fmt.Errorf("failed to refresh access token: %w", err)
+		}
+
+		// Update access token in account
+		account.CustomSettings["access_token"] = newAccessToken
+		account.CustomSettings["expires_at"] = fmt.Sprintf("%d", time.Now().Add(time.Hour).Unix())
+
+		// Update the account with new access token
+		if err := s.accountRepo.Update(&account); err != nil {
+			s.logger.Warn("Failed to update access token in database: %v", err)
+		} else {
+			s.logger.Debug("Successfully updated access token in database")
+		}
+
+		// Use new access token
+		accessToken = newAccessToken
+		tokenExpiry = time.Now().Add(time.Hour)
+	}
+
+	// Create OAuth2 config
+	config := &oauth2.Config{
+		ClientID:     oauth2Config.ClientID,
+		ClientSecret: oauth2Config.ClientSecret,
+		Scopes:       oauth2Config.Scopes,
+		Endpoint:     google.Endpoint,
+	}
+
+	// Create token
+	token := &oauth2.Token{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		Expiry:       tokenExpiry,
+		TokenType:    "Bearer",
+	}
+
+	// Create HTTP client with OAuth2
+	ctx := context.Background()
+	client := config.Client(ctx, token)
+
+	// Create Gmail service
+	service, err := gmail.NewService(ctx, option.WithHTTPClient(client))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Gmail service: %w", err)
+	}
+
+	return service, nil
+}
+
+// fetchGmailMessages fetches messages from Gmail API
+func (s *FetcherService) fetchGmailMessages(service *gmail.Service, options FetchEmailsOptions) ([]*gmail.Message, error) {
+	// Build query based on options
+	query := s.buildGmailQuery(service, options)
+
+	// Set mailbox/label filter by dynamically getting Gmail label ID
+	labelIDs := []string{}
+	if options.Mailbox != "" && options.Mailbox != "INBOX" {
+		// Use dynamic label ID lookup
+		labelID, err := s.getGmailLabelID(service, options.Mailbox)
+		if err != nil {
+			s.logger.Warn("Failed to get Gmail label ID for mailbox '%s': %v", options.Mailbox, err)
+			// Fall back to searching all messages if label not found
+			s.logger.Debug("Falling back to search all messages without label filter")
+		} else {
+			labelIDs = append(labelIDs, labelID)
+		}
+	} else {
+		labelIDs = append(labelIDs, "INBOX")
+	}
+
+	// List messages
+	listCall := service.Users.Messages.List("me").Q(query)
+	if len(labelIDs) > 0 {
+		listCall = listCall.LabelIds(labelIDs...)
+	}
+
+	// Set limit
+	limit := int64(options.Limit)
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+	listCall = listCall.MaxResults(limit)
+
+	s.logger.Debug("Fetching Gmail messages with query: %s, labels: %v, limit: %d", query, labelIDs, limit)
+
+	listResp, err := listCall.Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Gmail messages: %w", err)
+	}
+
+	if len(listResp.Messages) == 0 {
+		s.logger.Debug("No messages found for the query")
+		return []*gmail.Message{}, nil
+	}
+
+	// Fetch full message details
+	var messages []*gmail.Message
+	for _, msgRef := range listResp.Messages {
+		msg, err := service.Users.Messages.Get("me", msgRef.Id).Do()
+		if err != nil {
+			s.logger.Warn("Failed to get message %s: %v", msgRef.Id, err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
+}
+
+// buildGmailQuery builds Gmail search query based on options
+func (s *FetcherService) buildGmailQuery(service *gmail.Service, options FetchEmailsOptions) string {
+	var queryParts []string
+
+	// Add mailbox filter using Gmail search syntax
+	if options.Mailbox != "" {
+		// For Gmail API, we need to use the correct search syntax
+		// Don't add label filters here as they cause issues with custom labels
+		// Instead, we'll handle this in the message listing
+		s.logger.Debug("Mailbox filter '%s' will be handled during message listing", options.Mailbox)
+	}
+
+	// Date filter
+	if options.StartDate != nil {
+		queryParts = append(queryParts, fmt.Sprintf("after:%s", options.StartDate.Format("2006/01/02")))
+	}
+	if options.EndDate != nil {
+		queryParts = append(queryParts, fmt.Sprintf("before:%s", options.EndDate.Format("2006/01/02")))
+	}
+
+	// Search query
+	if options.SearchQuery != "" {
+		queryParts = append(queryParts, options.SearchQuery)
+	}
+
+	query := strings.Join(queryParts, " ")
+	if query == "" {
+		query = "in:inbox" // Default query
+	}
+
+	return query
+}
+
+// convertGmailMessage converts Gmail message to Email model
+func (s *FetcherService) convertGmailMessage(gmailMsg *gmail.Message, accountID uint) (*models.Email, error) {
+	email := &models.Email{
+		MessageID: gmailMsg.Id, // Use Gmail message ID
+		AccountID: accountID,
+		Size:      int64(gmailMsg.SizeEstimate),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Parse headers
+	for _, header := range gmailMsg.Payload.Headers {
+		switch header.Name {
+		case "Message-ID":
+			// Store original RFC Message-ID if available
+			if header.Value != "" {
+				email.MessageID = header.Value
+			}
+		case "Subject":
+			email.Subject = header.Value
+		case "From":
+			email.From = models.StringSlice{header.Value}
+		case "To":
+			email.To = models.StringSlice{header.Value}
+		case "Cc":
+			email.Cc = models.StringSlice{header.Value}
+		case "Bcc":
+			email.Bcc = models.StringSlice{header.Value}
+		case "Date":
+			if parsedDate, err := time.Parse(time.RFC1123Z, header.Value); err == nil {
+				email.Date = parsedDate
+			} else if parsedDate, err := time.Parse(time.RFC1123, header.Value); err == nil {
+				email.Date = parsedDate
+			}
+		}
+	}
+
+	// Handle Gmail labels - store all labels in Flags, primary label in MailboxName
+	if len(gmailMsg.LabelIds) > 0 {
+		email.Flags = models.StringSlice(gmailMsg.LabelIds)
+		email.MailboxName = s.getPrimaryMailboxFromLabels(gmailMsg.LabelIds)
+	} else {
+		email.MailboxName = "INBOX"
+	}
+
+	// Extract body content
+	if gmailMsg.Payload != nil {
+		email.Body, email.HTMLBody = s.extractGmailBody(gmailMsg.Payload)
+	}
+
+	// Use snippet if no body extracted
+	if email.Body == "" && gmailMsg.Snippet != "" {
+		email.Body = gmailMsg.Snippet
+	}
+
+	return email, nil
+}
+
+// getPrimaryMailboxFromLabels determines primary mailbox from Gmail labels
+func (s *FetcherService) getPrimaryMailboxFromLabels(labels []string) string {
+	// Priority mapping
+	priority := map[string]int{
+		"INBOX":     1,
+		"SENT":      2,
+		"DRAFT":     3,
+		"SPAM":      4,
+		"TRASH":     5,
+		"IMPORTANT": 6,
+		"STARRED":   7,
+	}
+
+	bestLabel := "INBOX" // Default
+	bestPriority := 999
+
+	for _, label := range labels {
+		if p, exists := priority[label]; exists && p < bestPriority {
+			bestLabel = label
+			bestPriority = p
+		}
+	}
+
+	return bestLabel
+}
+
+// extractGmailBody extracts text and HTML body from Gmail message payload
+func (s *FetcherService) extractGmailBody(payload *gmail.MessagePart) (string, string) {
+	var textBody, htmlBody string
+
+	// Check if this part has body data
+	if payload.Body != nil && payload.Body.Data != "" {
+		decoded, err := base64.URLEncoding.DecodeString(payload.Body.Data)
+		if err == nil {
+			content := string(decoded)
+
+			// Determine content type
+			mimeType := "text/plain"
+			for _, header := range payload.Headers {
+				if header.Name == "Content-Type" {
+					mimeType = header.Value
+					break
+				}
+			}
+
+			if strings.Contains(mimeType, "text/html") {
+				htmlBody = content
+			} else {
+				textBody = content
+			}
+		}
+	}
+
+	// Recursively check parts
+	for _, part := range payload.Parts {
+		partText, partHTML := s.extractGmailBody(part)
+		if partText != "" {
+			textBody = partText
+		}
+		if partHTML != "" {
+			htmlBody = partHTML
+		}
+	}
+
+	return textBody, htmlBody
+}
+
+// convertGmailMessages batch converts Gmail messages to Email models
+func (s *FetcherService) convertGmailMessages(messages []*gmail.Message, accountID uint) []models.Email {
+	var emails []models.Email
+	for _, msg := range messages {
+		email, err := s.convertGmailMessage(msg, accountID)
+		if err != nil {
+			s.logger.Warn("Failed to convert Gmail message %s: %v", msg.Id, err)
+			continue
+		}
+		emails = append(emails, *email)
+	}
+	return emails
+}
+
+// fetchGmailHistoryChanges fetches email changes using Gmail History API
+func (s *FetcherService) fetchGmailHistoryChanges(service *gmail.Service, startHistoryID string, accountID uint, options FetchEmailsOptions) ([]models.Email, string, error) {
+	s.logger.Debug("Fetching Gmail history changes from History ID: %s", startHistoryID)
+
+	// Parse start history ID
+	historyID, err := strconv.ParseUint(startHistoryID, 10, 64)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid history ID: %w", err)
+	}
+
+	// Get Gmail label ID for the specified mailbox for later filtering
+	var targetLabelID string
+	if options.Mailbox != "" && options.Mailbox != "INBOX" {
+		targetLabelID, err = s.getGmailLabelID(service, options.Mailbox)
+		if err != nil {
+			s.logger.Warn("Failed to get Gmail label ID for mailbox '%s': %v", options.Mailbox, err)
+			// Continue without label filter
+		}
+	} else {
+		targetLabelID = "INBOX"
+	}
+
+	// Call History API WITHOUT label filter to get all changes
+	// This ensures we don't miss new emails that haven't been labeled yet
+	historyCall := service.Users.History.List("me").StartHistoryId(historyID)
+	// DO NOT set LabelId filter here - we want all changes
+
+	s.logger.Debug("Calling History API without label filter to capture all changes")
+	historyResp, err := historyCall.Do()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get history: %w", err)
+	}
+
+	if len(historyResp.History) == 0 {
+		s.logger.Debug("No history changes found")
+		return []models.Email{}, fmt.Sprintf("%d", historyResp.HistoryId), nil
+	}
+
+	// Collect unique message IDs from history changes
+	messageIDSet := make(map[string]bool)
+	for _, history := range historyResp.History {
+		// Messages added
+		for _, msgAdded := range history.MessagesAdded {
+			if msgAdded.Message != nil {
+				messageIDSet[msgAdded.Message.Id] = true
+			}
+		}
+		// Messages deleted - we could handle this differently if needed
+		for _, msgDeleted := range history.MessagesDeleted {
+			if msgDeleted.Message != nil {
+				// For now, we'll still fetch it to mark as deleted in our system
+				messageIDSet[msgDeleted.Message.Id] = true
+			}
+		}
+		// Label changes
+		for _, labelAdded := range history.LabelsAdded {
+			if labelAdded.Message != nil {
+				messageIDSet[labelAdded.Message.Id] = true
+			}
+		}
+		for _, labelRemoved := range history.LabelsRemoved {
+			if labelRemoved.Message != nil {
+				messageIDSet[labelRemoved.Message.Id] = true
+			}
+		}
+	}
+
+	s.logger.Debug("Found %d unique message IDs in history changes", len(messageIDSet))
+
+	// Fetch full message details for changed messages
+	var messages []*gmail.Message
+	for messageID := range messageIDSet {
+		msg, err := service.Users.Messages.Get("me", messageID).Do()
+		if err != nil {
+			s.logger.Warn("Failed to get message %s: %v", messageID, err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	// Filter messages by target label if specified
+	var filteredByLabel []*gmail.Message
+	if targetLabelID != "" {
+		for _, msg := range messages {
+			// Check if message has the target label
+			hasTargetLabel := false
+			for _, labelID := range msg.LabelIds {
+				if labelID == targetLabelID {
+					hasTargetLabel = true
+					break
+				}
+			}
+			if hasTargetLabel {
+				filteredByLabel = append(filteredByLabel, msg)
+			}
+		}
+		s.logger.Debug("Filtered %d messages by label '%s' (target: %s)", len(filteredByLabel), options.Mailbox, targetLabelID)
+	} else {
+		filteredByLabel = messages
+	}
+
+	// Apply additional options filters (date, search query, etc.)
+	filteredMessages := s.filterGmailMessages(filteredByLabel, options)
+
+	s.logger.Info("Found %d changed messages in history, %d after label filtering, %d after all filters", len(messages), len(filteredByLabel), len(filteredMessages))
+
+	// Convert to Email models
+	emails := s.convertGmailMessages(filteredMessages, accountID)
+
+	return emails, fmt.Sprintf("%d", historyResp.HistoryId), nil
+}
+
+// filterGmailMessages applies filtering options to Gmail messages
+func (s *FetcherService) filterGmailMessages(messages []*gmail.Message, options FetchEmailsOptions) []*gmail.Message {
+	var filtered []*gmail.Message
+
+	for _, msg := range messages {
+		// Apply date filter
+		if options.StartDate != nil || options.EndDate != nil {
+			msgDate := s.getGmailMessageDate(msg)
+			if msgDate.IsZero() {
+				continue // Skip messages without valid date
+			}
+
+			if options.StartDate != nil && msgDate.Before(*options.StartDate) {
+				continue
+			}
+			if options.EndDate != nil && msgDate.After(*options.EndDate) {
+				continue
+			}
+		}
+
+		// Apply search query filter (basic implementation)
+		if options.SearchQuery != "" {
+			if !s.messageMatchesQuery(msg, options.SearchQuery) {
+				continue
+			}
+		}
+
+		filtered = append(filtered, msg)
+
+		// Apply limit
+		if options.Limit > 0 && len(filtered) >= options.Limit {
+			break
+		}
+	}
+
+	return filtered
+}
+
+// getGmailMessageDate extracts date from Gmail message headers
+func (s *FetcherService) getGmailMessageDate(msg *gmail.Message) time.Time {
+	if msg.Payload == nil {
+		return time.Time{}
+	}
+
+	for _, header := range msg.Payload.Headers {
+		if header.Name == "Date" {
+			if parsedDate, err := time.Parse(time.RFC1123Z, header.Value); err == nil {
+				return parsedDate
+			} else if parsedDate, err := time.Parse(time.RFC1123, header.Value); err == nil {
+				return parsedDate
+			}
+		}
+	}
+	return time.Time{}
+}
+
+// messageMatchesQuery checks if a Gmail message matches the search query
+func (s *FetcherService) messageMatchesQuery(msg *gmail.Message, query string) bool {
+	query = strings.ToLower(query)
+
+	// Check snippet
+	if strings.Contains(strings.ToLower(msg.Snippet), query) {
+		return true
+	}
+
+	// Check headers
+	if msg.Payload != nil {
+		for _, header := range msg.Payload.Headers {
+			headerValue := strings.ToLower(header.Value)
+			if strings.Contains(headerValue, query) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// getGmailLabelID dynamically gets the Gmail label ID for a given mailbox name
+func (s *FetcherService) getGmailLabelID(service *gmail.Service, mailboxName string) (string, error) {
+	// Get all labels from Gmail
+	labelList, err := service.Users.Labels.List("me").Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to get labels: %w", err)
+	}
+
+	// First, try to match by exact name
+	for _, label := range labelList.Labels {
+		if label.Name == mailboxName {
+			return label.Id, nil
+		}
+	}
+
+	// If no exact match, try to match common mappings
+	// Map IMAP folder names to Gmail system labels
+	systemLabelMap := map[string]string{
+		"INBOX":     "INBOX",
+		"SENT":      "SENT",
+		"DRAFTS":    "DRAFT",
+		"TRASH":     "TRASH",
+		"SPAM":      "SPAM",
+		"IMPORTANT": "IMPORTANT",
+		"STARRED":   "STARRED",
+	}
+
+	// Check if it's a system label
+	if labelID, exists := systemLabelMap[strings.ToUpper(mailboxName)]; exists {
+		return labelID, nil
+	}
+
+	// Try to find by matching common Gmail folder patterns
+	for _, label := range labelList.Labels {
+		// Match patterns like [Gmail]/已发邮件 with SENT label
+		if strings.Contains(mailboxName, "已发邮件") || strings.Contains(mailboxName, "Sent Mail") {
+			if label.Id == "SENT" {
+				return label.Id, nil
+			}
+		}
+		if strings.Contains(mailboxName, "已加星标") || strings.Contains(mailboxName, "Starred") {
+			if label.Id == "STARRED" {
+				return label.Id, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("label not found: %s", mailboxName)
+}
+
+// fetchGmailHistoryChangesUnified fetches ALL email changes using Gmail History API without label filtering
+func (s *FetcherService) fetchGmailHistoryChangesUnified(service *gmail.Service, startHistoryID string, accountID uint, options FetchEmailsOptions) ([]models.Email, string, error) {
+	s.logger.Info("=== Gmail History API Debug ===")
+	s.logger.Info("Starting History ID: %s", startHistoryID)
+
+	// Parse start history ID
+	historyID, err := strconv.ParseUint(startHistoryID, 10, 64)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid history ID: %w", err)
+	}
+
+	// Call History API WITHOUT any label filter to get ALL changes
+	// This is the key optimization - we get everything in one API call
+	historyCall := service.Users.History.List("me").StartHistoryId(historyID)
+
+	s.logger.Info("Calling Gmail History API with startHistoryId=%d", historyID)
+	historyResp, err := historyCall.Do()
+	if err != nil {
+		s.logger.Error("Gmail History API call failed: %v", err)
+		return nil, "", fmt.Errorf("failed to get history: %w", err)
+	}
+
+	s.logger.Info("Gmail History API Response:")
+	s.logger.Info("  - Current History ID: %d", historyResp.HistoryId)
+	s.logger.Info("  - History entries count: %d", len(historyResp.History))
+	s.logger.Info("  - Next Page Token: %s", historyResp.NextPageToken)
+
+	if len(historyResp.History) == 0 {
+		s.logger.Info("No history changes found between %s and %d", startHistoryID, historyResp.HistoryId)
+		return []models.Email{}, fmt.Sprintf("%d", historyResp.HistoryId), nil
+	}
+
+	// Collect unique message IDs from ALL history changes
+	messageIDSet := make(map[string]bool)
+	for _, history := range historyResp.History {
+		// Messages added
+		for _, msgAdded := range history.MessagesAdded {
+			if msgAdded.Message != nil {
+				messageIDSet[msgAdded.Message.Id] = true
+			}
+		}
+		// Messages deleted
+		for _, msgDeleted := range history.MessagesDeleted {
+			if msgDeleted.Message != nil {
+				messageIDSet[msgDeleted.Message.Id] = true
+			}
+		}
+		// Label changes
+		for _, labelAdded := range history.LabelsAdded {
+			if labelAdded.Message != nil {
+				messageIDSet[labelAdded.Message.Id] = true
+			}
+		}
+		for _, labelRemoved := range history.LabelsRemoved {
+			if labelRemoved.Message != nil {
+				messageIDSet[labelRemoved.Message.Id] = true
+			}
+		}
+	}
+
+	s.logger.Debug("Found %d unique message IDs in unified history changes", len(messageIDSet))
+
+	// Fetch full message details for all changed messages
+	var messages []*gmail.Message
+	for messageID := range messageIDSet {
+		msg, err := service.Users.Messages.Get("me", messageID).Do()
+		if err != nil {
+			s.logger.Warn("Failed to get message %s: %v", messageID, err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	// For incremental sync via History API, we don't need date filtering
+	// History API already provides incremental changes since last sync
+	s.logger.Info("Gmail unified incremental sync: found %d changed messages", len(messages))
+
+	// Convert to Email models directly - Gmail labels are stored in LabelIds
+	emails := s.convertGmailMessages(messages, accountID)
+
+	return emails, fmt.Sprintf("%d", historyResp.HistoryId), nil
+}
+
+// fetchGmailMessagesUnified fetches Gmail messages for full sync without label filtering
+func (s *FetcherService) fetchGmailMessagesUnified(service *gmail.Service, options FetchEmailsOptions) ([]*gmail.Message, error) {
+	s.logger.Debug("Fetching Gmail messages (unified full sync)")
+
+	// Build query based on options (date, search) but NOT mailbox/labels
+	query := s.buildGmailQueryUnified(options)
+
+	// List messages without label restrictions
+	listCall := service.Users.Messages.List("me").Q(query)
+
+	// Set a reasonable limit for full sync
+	limit := int64(options.Limit)
+	if limit <= 0 || limit > 500 {
+		limit = 100 // Default for unified sync
+	}
+	listCall = listCall.MaxResults(limit)
+
+	s.logger.Debug("Fetching Gmail messages (unified) with query: %s, limit: %d", query, limit)
+
+	listResp, err := listCall.Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Gmail messages: %w", err)
+	}
+
+	if len(listResp.Messages) == 0 {
+		s.logger.Debug("No messages found in unified full sync")
+		return []*gmail.Message{}, nil
+	}
+
+	// Fetch full message details
+	var messages []*gmail.Message
+	for _, msgRef := range listResp.Messages {
+		msg, err := service.Users.Messages.Get("me", msgRef.Id).Do()
+		if err != nil {
+			s.logger.Warn("Failed to get message %s: %v", msgRef.Id, err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	s.logger.Info("Gmail unified full sync: fetched %d messages", len(messages))
+	return messages, nil
+}
+
+// buildGmailQueryUnified builds Gmail search query without label filters
+func (s *FetcherService) buildGmailQueryUnified(options FetchEmailsOptions) string {
+	var queryParts []string
+
+	// Date filter
+	if options.StartDate != nil {
+		queryParts = append(queryParts, fmt.Sprintf("after:%s", options.StartDate.Format("2006/01/02")))
+	}
+	if options.EndDate != nil {
+		queryParts = append(queryParts, fmt.Sprintf("before:%s", options.EndDate.Format("2006/01/02")))
+	}
+
+	// Search query
+	if options.SearchQuery != "" {
+		queryParts = append(queryParts, options.SearchQuery)
+	}
+
+	query := strings.Join(queryParts, " ")
+	if query == "" {
+		query = "in:anywhere" // Get everything
+	}
+
+	return query
+}
+
+// filterGmailMessagesUnified applies unified filtering (date, search, NOT labels)
+func (s *FetcherService) filterGmailMessagesUnified(messages []*gmail.Message, options FetchEmailsOptions) []*gmail.Message {
+	var filtered []*gmail.Message
+
+	for _, msg := range messages {
+		// Apply date filter
+		if options.StartDate != nil || options.EndDate != nil {
+			msgDate := s.getGmailMessageDate(msg)
+			if msgDate.IsZero() {
+				continue // Skip messages without valid date
+			}
+
+			if options.StartDate != nil && msgDate.Before(*options.StartDate) {
+				continue
+			}
+			if options.EndDate != nil && msgDate.After(*options.EndDate) {
+				continue
+			}
+		}
+
+		// Apply search filter
+		if options.SearchQuery != "" {
+			if !s.messageMatchesQuery(msg, options.SearchQuery) {
+				continue
+			}
+		}
+
+		// No label filtering - we want all messages with their labels intact
+		filtered = append(filtered, msg)
+	}
+
+	return filtered
+}
+
+// Helper function to match Gmail labels with mailbox names
+func (s *FetcherService) matchGmailLabelToMailbox(mailboxName string, labels []*gmail.Label) (string, error) {
+	for _, label := range labels {
+		if strings.Contains(mailboxName, "重要邮件") || strings.Contains(mailboxName, "Important") {
+			if label.Id == "IMPORTANT" {
+				return label.Id, nil
+			}
+		}
+		if strings.Contains(mailboxName, "草稿") || strings.Contains(mailboxName, "Drafts") {
+			if label.Id == "DRAFT" {
+				return label.Id, nil
+			}
+		}
+		if strings.Contains(mailboxName, "垃圾邮件") || strings.Contains(mailboxName, "Spam") {
+			if label.Id == "SPAM" {
+				return label.Id, nil
+			}
+		}
+		if strings.Contains(mailboxName, "回收站") || strings.Contains(mailboxName, "Trash") {
+			if label.Id == "TRASH" {
+				return label.Id, nil
+			}
+		}
+	}
+
+	// If still no match, return empty string (no label filter)
+	s.logger.Warn("Could not find Gmail label for mailbox: %s", mailboxName)
+	return "", fmt.Errorf("label not found for mailbox: %s", mailboxName)
+}
+
+// getGmailMailboxes retrieves all Gmail labels as mailboxes using Gmail API
+func (s *FetcherService) getGmailMailboxes(account models.EmailAccount) ([]models.Mailbox, error) {
+	s.logger.Debug("Getting Gmail mailboxes using Gmail API for account %s", account.EmailAddress)
+
+	// Create Gmail API service
+	gmailService, err := s.createGmailService(account)
+	if err != nil {
+		s.logger.Error("Failed to create Gmail service: %v", err)
+		return nil, fmt.Errorf("failed to create Gmail service: %w", err)
+	}
+
+	// Get all labels from Gmail
+	labelList, err := gmailService.Users.Labels.List("me").Do()
+	if err != nil {
+		s.logger.Error("Failed to get Gmail labels: %v", err)
+		return nil, fmt.Errorf("failed to get Gmail labels: %w", err)
+	}
+
+	var mailboxes []models.Mailbox
+	for _, label := range labelList.Labels {
+		mailbox := models.Mailbox{
+			Name:      label.Name,
+			AccountID: account.ID,
+			Delimiter: "/", // Gmail uses forward slash as delimiter
+		}
+
+		// Convert label type to flags
+		switch label.Type {
+		case "system":
+			mailbox.Flags = append(mailbox.Flags, "\\System")
+		case "user":
+			mailbox.Flags = append(mailbox.Flags, "\\User")
+		}
+
+		// Add visibility flags
+		if label.LabelListVisibility == "labelShow" {
+			mailbox.Flags = append(mailbox.Flags, "\\Visible")
+		}
+		if label.MessageListVisibility == "show" {
+			mailbox.Flags = append(mailbox.Flags, "\\MessageShow")
+		}
+
+		mailboxes = append(mailboxes, mailbox)
+	}
+
+	s.logger.Info("Successfully retrieved %d Gmail labels as mailboxes for account %s", len(mailboxes), account.EmailAddress)
+	return mailboxes, nil
+}
+
+// GetAccountByEmail gets an email account by email address
+func (s *FetcherService) GetAccountByEmail(emailAddress string) (*models.EmailAccount, error) {
+	s.logger.Debug("Getting account by email: %s", emailAddress)
+
+	// Use the repository to find the account
+	accounts, err := s.accountRepo.GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get accounts: %w", err)
+	}
+
+	for _, account := range accounts {
+		if account.EmailAddress == emailAddress {
+			s.logger.Debug("Found account for email: %s", emailAddress)
+			return &account, nil
+		}
+	}
+
+	return nil, fmt.Errorf("account not found for email: %s", emailAddress)
 }

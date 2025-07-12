@@ -9,13 +9,14 @@ type EmailAccountSyncConfig struct {
 	ID                uint        `gorm:"primaryKey" json:"id"`
 	AccountID         uint        `gorm:"uniqueIndex;not null" json:"account_id"`
 	EnableAutoSync    bool        `gorm:"default:true" json:"enable_auto_sync"`
-	SyncInterval      int         `gorm:"default:300" json:"sync_interval"` // seconds
+	SyncInterval      int         `gorm:"default:5" json:"sync_interval"` // seconds
 	SyncFolders       StringSlice `gorm:"type:text" json:"sync_folders"`
 	LastSyncTime      *time.Time  `json:"last_sync_time,omitempty"`     // 上次同步开始时间
 	LastSyncEndTime   *time.Time  `json:"last_sync_end_time,omitempty"` // 上次同步结束时间
 	LastSyncMessageID string      `json:"last_sync_message_id,omitempty"`
 	LastSyncError     string      `json:"last_sync_error,omitempty"`
 	SyncStatus        string      `gorm:"default:idle" json:"sync_status"` // idle, syncing, error
+	LastHistoryID     string      `json:"last_history_id,omitempty"`       // Gmail API History ID for incremental sync
 	CreatedAt         time.Time   `json:"created_at"`
 	UpdatedAt         time.Time   `json:"updated_at"`
 
@@ -56,7 +57,7 @@ func (EmailAccountSyncConfig) TableName() string {
 type GlobalSyncConfig struct {
 	ID                  uint        `gorm:"primaryKey" json:"id"`
 	DefaultEnableSync   bool        `gorm:"default:true" json:"default_enable_sync"`
-	DefaultSyncInterval int         `gorm:"default:300" json:"default_sync_interval"` // seconds
+	DefaultSyncInterval int         `gorm:"default:5" json:"default_sync_interval"` // seconds
 	DefaultSyncFolders  StringSlice `gorm:"type:text" json:"default_sync_folders"`
 	MaxSyncWorkers      int         `gorm:"default:10" json:"max_sync_workers"`
 	MaxEmailsPerSync    int         `gorm:"default:100" json:"max_emails_per_sync"`

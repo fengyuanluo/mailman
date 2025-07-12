@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -22,9 +23,20 @@ type OAuth2Config struct {
 	TokenURL     string
 }
 
+// TokenCacheEntry represents a cached token entry
+type TokenCacheEntry struct {
+	AccessToken string
+	ExpiresAt   time.Time
+	RefreshTime time.Time
+}
+
 // OAuth2Service handles OAuth2 authentication
 type OAuth2Service struct {
-	httpClient *http.Client
+	httpClient   *http.Client
+	tokenCache   map[string]*TokenCacheEntry
+	cacheMutex   sync.RWMutex
+	accountLocks map[string]*sync.Mutex // 基于账户ID的锁
+	locksMutex   sync.RWMutex           // 保护 accountLocks map 的锁
 }
 
 // NewOAuth2Service creates a new OAuth2Service
@@ -33,7 +45,105 @@ func NewOAuth2Service() *OAuth2Service {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		tokenCache:   make(map[string]*TokenCacheEntry),
+		accountLocks: make(map[string]*sync.Mutex),
 	}
+}
+
+// getAccountLock 获取账户特定的锁，避免不同账户互相阻塞
+func (s *OAuth2Service) getAccountLock(accountKey string) *sync.Mutex {
+	s.locksMutex.RLock()
+	lock, exists := s.accountLocks[accountKey]
+	s.locksMutex.RUnlock()
+
+	if exists {
+		return lock
+	}
+
+	// 如果锁不存在，需要创建新锁
+	s.locksMutex.Lock()
+	defer s.locksMutex.Unlock()
+
+	// 双重检查，防止并发创建
+	if lock, exists := s.accountLocks[accountKey]; exists {
+		return lock
+	}
+
+	// 创建新锁
+	lock = &sync.Mutex{}
+	s.accountLocks[accountKey] = lock
+	return lock
+}
+
+// getCacheKey 生成缓存键
+func (s *OAuth2Service) getCacheKey(providerType, clientID, refreshToken string) string {
+	// 简化缓存键生成，避免MD5依赖
+	return fmt.Sprintf("%s_%s_%s", providerType, clientID, refreshToken[:10])
+}
+
+// RefreshAccessTokenWithCache 带缓存和并发控制的token刷新
+func (s *OAuth2Service) RefreshAccessTokenWithCache(providerType, clientID, clientSecret, refreshToken string, accountID uint) (string, error) {
+	cacheKey := s.getCacheKey(providerType, clientID, refreshToken)
+	accountKey := fmt.Sprintf("%s_%d", providerType, accountID)
+
+	// 先检查缓存
+	s.cacheMutex.RLock()
+	if entry, exists := s.tokenCache[cacheKey]; exists {
+		// 检查token是否还有效（提前5分钟过期）
+		if time.Now().Before(entry.ExpiresAt.Add(-5 * time.Minute)) {
+			s.cacheMutex.RUnlock()
+			fmt.Printf("OAuth2: Using cached token for account %d, expires at: %v\n", accountID, entry.ExpiresAt)
+			return entry.AccessToken, nil
+		}
+	}
+	s.cacheMutex.RUnlock()
+
+	// 获取账户特定的锁
+	accountLock := s.getAccountLock(accountKey)
+	accountLock.Lock()
+	defer accountLock.Unlock()
+
+	// 锁定后再次检查缓存（双重检查锁定模式）
+	s.cacheMutex.RLock()
+	if entry, exists := s.tokenCache[cacheKey]; exists {
+		if time.Now().Before(entry.ExpiresAt.Add(-5 * time.Minute)) {
+			s.cacheMutex.RUnlock()
+			fmt.Printf("OAuth2: Using cached token after lock for account %d, expires at: %v\n", accountID, entry.ExpiresAt)
+			return entry.AccessToken, nil
+		}
+	}
+	s.cacheMutex.RUnlock()
+
+	// 防止频繁刷新：如果上次刷新时间在30秒内，等待一下
+	s.cacheMutex.RLock()
+	if entry, exists := s.tokenCache[cacheKey]; exists {
+		if time.Since(entry.RefreshTime) < 30*time.Second {
+			s.cacheMutex.RUnlock()
+			fmt.Printf("OAuth2: Throttling refresh for account %d, last refresh: %v\n", accountID, entry.RefreshTime)
+			return "", fmt.Errorf("token refresh throttled, please wait a moment")
+		}
+	}
+	s.cacheMutex.RUnlock()
+
+	fmt.Printf("OAuth2: Refreshing token for account %d (provider: %s)\n", accountID, providerType)
+
+	// 刷新token
+	newAccessToken, err := s.RefreshAccessTokenForProvider(providerType, clientID, clientSecret, refreshToken)
+	if err != nil {
+		return "", err
+	}
+
+	// 更新缓存
+	s.cacheMutex.Lock()
+	s.tokenCache[cacheKey] = &TokenCacheEntry{
+		AccessToken: newAccessToken,
+		ExpiresAt:   time.Now().Add(55 * time.Minute), // 比实际过期时间早5分钟
+		RefreshTime: time.Now(),
+	}
+	s.cacheMutex.Unlock()
+
+	fmt.Printf("OAuth2: Token refreshed and cached for account %d\n", accountID)
+	return newAccessToken, nil
 }
 
 // RefreshAccessToken refreshes the access token using refresh token (legacy method for Outlook)
@@ -125,7 +235,10 @@ func (s *OAuth2Service) RefreshAccessTokenForProvider(providerType string, clien
 		return "", fmt.Errorf("access_token not found in response")
 	}
 
-	fmt.Printf("OAuth2: Successfully obtained access token (length: %d)\n", len(accessToken))
+	// 获取过期时间信息
+	expiresIn, _ := result["expires_in"].(float64)
+	fmt.Printf("OAuth2: Successfully obtained access token (length: %d), expires in: %.0f seconds\n", len(accessToken), expiresIn)
+
 	return accessToken, nil
 }
 

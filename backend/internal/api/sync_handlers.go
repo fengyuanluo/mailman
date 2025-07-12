@@ -204,19 +204,14 @@ func (h *SyncHandlers) CreateAccountSyncConfig(w http.ResponseWriter, r *http.Re
 	h.logger.Debug("Request data: EnableAutoSync=%v, SyncInterval=%v, SyncFolders=%v",
 		req.EnableAutoSync, req.SyncInterval, req.SyncFolders)
 
-	// Validate sync interval
-	if req.SyncInterval != nil && *req.SyncInterval < 5 {
+	// Validate sync interval - 允许更小的间隔值
+	if req.SyncInterval != nil && *req.SyncInterval < 1 {
 		h.logger.Warn("Invalid sync interval: %d", *req.SyncInterval)
-		http.Error(w, "Sync interval must be at least 5 seconds", http.StatusBadRequest)
+		http.Error(w, "Sync interval must be at least 1 second", http.StatusBadRequest)
 		return
 	}
 
-	// Validate folders
-	if req.SyncFolders != nil && len(req.SyncFolders) == 0 {
-		h.logger.Warn("No sync folders specified")
-		http.Error(w, "At least one sync folder must be specified", http.StatusBadRequest)
-		return
-	}
+	// 不再验证文件夹，由系统自动处理
 
 	// Check if config already exists
 	_, err = h.syncConfigRepo.GetByAccountID(uint(accountID))
@@ -230,8 +225,8 @@ func (h *SyncHandlers) CreateAccountSyncConfig(w http.ResponseWriter, r *http.Re
 	config := &models.EmailAccountSyncConfig{
 		AccountID:      uint(accountID),
 		EnableAutoSync: true,
-		SyncInterval:   300,
-		SyncFolders:    models.StringSlice{"INBOX"},
+		SyncInterval:   5,                           // 默认5秒间隔
+		SyncFolders:    models.StringSlice{"INBOX"}, // 系统默认同步所有重要文件夹
 		SyncStatus:     "idle",
 	}
 
@@ -242,9 +237,7 @@ func (h *SyncHandlers) CreateAccountSyncConfig(w http.ResponseWriter, r *http.Re
 	if req.SyncInterval != nil {
 		config.SyncInterval = *req.SyncInterval
 	}
-	if req.SyncFolders != nil {
-		config.SyncFolders = models.StringSlice(req.SyncFolders)
-	}
+	// 不再允许用户指定文件夹，系统自动处理
 
 	h.logger.Info("Creating sync config for account %d: AutoSync=%v, Interval=%d, Folders=%v",
 		accountID, config.EnableAutoSync, config.SyncInterval, config.SyncFolders)
@@ -290,19 +283,14 @@ func (h *SyncHandlers) UpdateAccountSyncConfig(w http.ResponseWriter, r *http.Re
 	h.logger.Debug("Update request: EnableAutoSync=%v, SyncInterval=%v, SyncFolders=%v",
 		req.EnableAutoSync, req.SyncInterval, req.SyncFolders)
 
-	// Validate sync interval
-	if req.SyncInterval != nil && *req.SyncInterval < 5 {
+	// Validate sync interval - 允许更小的间隔值
+	if req.SyncInterval != nil && *req.SyncInterval < 1 {
 		h.logger.Warn("Invalid sync interval: %d", *req.SyncInterval)
-		http.Error(w, "Sync interval must be at least 5 seconds", http.StatusBadRequest)
+		http.Error(w, "Sync interval must be at least 1 second", http.StatusBadRequest)
 		return
 	}
 
-	// Validate folders
-	if req.SyncFolders != nil && len(req.SyncFolders) == 0 {
-		h.logger.Warn("No sync folders specified")
-		http.Error(w, "At least one sync folder must be specified", http.StatusBadRequest)
-		return
-	}
+	// 不再验证文件夹，由系统自动处理
 
 	// Get existing config
 	config, err := h.syncConfigRepo.GetByAccountID(uint(accountID))
@@ -322,9 +310,7 @@ func (h *SyncHandlers) UpdateAccountSyncConfig(w http.ResponseWriter, r *http.Re
 	if req.SyncInterval != nil {
 		config.SyncInterval = *req.SyncInterval
 	}
-	if req.SyncFolders != nil {
-		config.SyncFolders = models.StringSlice(req.SyncFolders)
-	}
+	// 不再允许用户指定文件夹，系统自动处理
 
 	h.logger.Info("Updating sync config for account %d: AutoSync=%v, Interval=%d, Folders=%v",
 		accountID, config.EnableAutoSync, config.SyncInterval, config.SyncFolders)
@@ -485,19 +471,14 @@ func (h *SyncHandlers) UpdateGlobalSyncConfig(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Validate sync interval
-	if req.DefaultSyncInterval != nil && *req.DefaultSyncInterval < 5 {
+	// Validate sync interval - 允许更小的间隔值
+	if req.DefaultSyncInterval != nil && *req.DefaultSyncInterval < 1 {
 		h.logger.Warn("Invalid sync interval: %d", *req.DefaultSyncInterval)
-		http.Error(w, "Sync interval must be at least 5 seconds", http.StatusBadRequest)
+		http.Error(w, "Sync interval must be at least 1 second", http.StatusBadRequest)
 		return
 	}
 
-	// Validate folders
-	if req.DefaultSyncFolders != nil && len(req.DefaultSyncFolders) == 0 {
-		h.logger.Warn("No sync folders specified")
-		http.Error(w, "At least one sync folder must be specified", http.StatusBadRequest)
-		return
-	}
+	// 不再验证文件夹，由系统自动处理
 
 	// Get current global config
 	globalConfig, err := h.syncConfigRepo.GetGlobalConfig()
@@ -646,10 +627,8 @@ func (h *SyncHandlers) CreateTemporarySyncConfig(w http.ResponseWriter, r *http.
 		req.SyncInterval = 5 // Default to 5 seconds
 	}
 
-	// Validate folders
-	if len(req.SyncFolders) == 0 {
-		req.SyncFolders = []string{"INBOX"} // Default to INBOX
-	}
+	// 不再验证文件夹，直接使用默认的同步所有重要文件夹
+	req.SyncFolders = []string{"INBOX"} // 系统默认同步所有重要文件夹
 
 	// Calculate expiration time
 	expiresAt := time.Now().Add(time.Duration(req.DurationMinutes) * time.Minute)
@@ -739,12 +718,12 @@ func (h *SyncHandlers) GetEffectiveSyncConfig(w http.ResponseWriter, r *http.Req
 type UpdateSyncConfigRequest struct {
 	EnableAutoSync *bool    `json:"enable_auto_sync,omitempty"`
 	SyncInterval   *int     `json:"sync_interval,omitempty"`
-	SyncFolders    []string `json:"sync_folders,omitempty"`
+	SyncFolders    []string `json:"sync_folders,omitempty"` // 保留但不再处理
 }
 
 type CreateTemporarySyncConfigRequest struct {
 	SyncInterval    int      `json:"sync_interval"`
-	SyncFolders     []string `json:"sync_folders"`
+	SyncFolders     []string `json:"sync_folders,omitempty"` // 可选，系统自动处理
 	DurationMinutes int      `json:"duration_minutes"`
 }
 

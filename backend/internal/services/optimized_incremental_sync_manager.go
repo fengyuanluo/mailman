@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -396,25 +397,36 @@ func (m *OptimizedIncrementalSyncManager) fetchEmails(ctx context.Context, req F
 		m.logger.Info("Auto-discovered %d folders for %s: %v", len(folders), account.EmailAddress, folders)
 	}
 
-	// 获取邮件，使用宽松的时间过滤
-	var startDate *time.Time
-	if req.StartDate != nil {
-		startDate = req.StartDate
-	} else {
-		// 默认获取最近7天的邮件
-		defaultStart := time.Now().Add(-7 * 24 * time.Hour)
-		startDate = &defaultStart
-	}
-
-	m.logger.Info("Fetching emails from %d folders since %v", len(folders), startDate.Format("2006-01-02 15:04:05"))
-
-	// 使用 FetcherService 直接获取邮件
+	// 创建 FetchEmailsOptions - 为Gmail账户特别处理
 	options := FetchEmailsOptions{
 		Folders:         folders,
-		StartDate:       startDate,
-		EndDate:         req.EndDate, // 使用请求中的结束时间
-		FetchFromServer: true,        // 关键修复：从邮件服务器获取新邮件
-		IncludeBody:     true,        // 包含邮件正文
+		FetchFromServer: true, // 关键修复：从邮件服务器获取新邮件
+		IncludeBody:     true, // 包含邮件正文
+	}
+
+	// 检查是否是Gmail账户
+	isGmailAccount := account.AuthType == "oauth2" && (account.EmailAddress == "" ||
+		strings.Contains(account.EmailAddress, "@gmail.com") ||
+		strings.Contains(account.EmailAddress, "@googlemail.com"))
+
+	if isGmailAccount {
+		// Gmail账户：不传递日期过滤器，让Gmail History API自己处理增量同步
+		m.logger.Info("Gmail account detected: using Gmail History API for incremental sync without date filters")
+	} else {
+		// 非Gmail账户：使用传统的日期过滤
+		var startDate *time.Time
+		if req.StartDate != nil {
+			startDate = req.StartDate
+		} else {
+			// 默认获取最近7天的邮件
+			defaultStart := time.Now().Add(-7 * 24 * time.Hour)
+			startDate = &defaultStart
+		}
+
+		options.StartDate = startDate
+		options.EndDate = req.EndDate
+
+		m.logger.Info("Non-Gmail account: fetching emails from %d folders since %v", len(folders), startDate.Format("2006-01-02 15:04:05"))
 	}
 
 	emails, err := fetcherService.FetchEmailsFromMultipleMailboxes(*account, options)
@@ -428,18 +440,33 @@ func (m *OptimizedIncrementalSyncManager) fetchEmails(ctx context.Context, req F
 
 // getAccountByEmail 根据邮箱地址获取账户信息
 func (m *OptimizedIncrementalSyncManager) getAccountByEmail(emailAddress string) (*models.EmailAccount, error) {
-	// 这里需要添加获取账户的逻辑
-	// 暂时通过遍历配置获取
+	// 首先尝试从本地缓存获取
 	m.configMu.RLock()
-	defer m.configMu.RUnlock()
-
 	for _, config := range m.syncConfigs {
 		if config.Account.EmailAddress == emailAddress {
+			m.configMu.RUnlock()
 			return &config.Account, nil
 		}
 	}
+	m.configMu.RUnlock()
 
-	return nil, fmt.Errorf("account not found for email: %s", emailAddress)
+	// 如果本地缓存没有找到，从数据库获取
+	m.logger.Debug("Account not found in cache, querying database for: %s", emailAddress)
+
+	// 通过 scheduler 获取 FetcherService
+	fetcherService := m.scheduler.GetFetcherService()
+	if fetcherService == nil {
+		return nil, fmt.Errorf("fetcher service not available")
+	}
+
+	// 使用 FetcherService 从数据库获取账户
+	account, err := fetcherService.GetAccountByEmail(emailAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get account from database: %w", err)
+	}
+
+	m.logger.Debug("Successfully retrieved account from database for: %s", emailAddress)
+	return account, nil
 }
 
 // updateSyncStatus 更新同步状态
