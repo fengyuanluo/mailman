@@ -84,7 +84,15 @@ func (r *OAuth2GlobalConfigRepository) GetEnabled() ([]models.OAuth2GlobalConfig
 
 // Update updates an OAuth2 global config
 func (r *OAuth2GlobalConfigRepository) Update(config *models.OAuth2GlobalConfig) error {
-	return r.db.Save(config).Error
+	// 使用Where().Updates()来确保是更新操作而不是插入
+	result := r.db.Where("id = ?", config.ID).Updates(config)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("no rows affected, record not found")
+	}
+	return nil
 }
 
 // Delete soft deletes an OAuth2 global config

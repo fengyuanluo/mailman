@@ -234,6 +234,11 @@ func (s *FetcherService) fetchEmailsFromServer(account models.EmailAccount, opti
 	var c *client.Client
 	var err error
 
+	// Check if MailProvider is nil
+	if account.MailProvider == nil {
+		return nil, fmt.Errorf("mail provider is not configured for account %s", account.EmailAddress)
+	}
+
 	serverAddr := fmt.Sprintf("%s:%d", account.MailProvider.IMAPServer, account.MailProvider.IMAPPort)
 	s.logger.Info("Connecting to IMAP server %s for %s", serverAddr, account.EmailAddress)
 
@@ -337,10 +342,10 @@ func (s *FetcherService) fetchEmailsFromServer(account models.EmailAccount, opti
 		// Get client_secret from global OAuth2 config (secure approach)
 		clientSecret := ""
 		oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
-		
+
 		var config *models.OAuth2GlobalConfig
 		var err error
-		
+
 		// Priority 1: Use OAuth2ProviderID if available (new multi-config support)
 		if account.OAuth2ProviderID != nil && *account.OAuth2ProviderID > 0 {
 			s.logger.Debug("Using OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
@@ -352,7 +357,7 @@ func (s *FetcherService) fetchEmailsFromServer(account models.EmailAccount, opti
 				s.logger.Warn("Failed to get config from OAuth2ProviderID %d for account %s: %v", *account.OAuth2ProviderID, account.EmailAddress, err)
 			}
 		}
-		
+
 		// Priority 2: Fallback to provider type lookup (backward compatibility)
 		if config == nil {
 			s.logger.Debug("Falling back to provider type lookup for %s", account.MailProvider.Type)
@@ -635,6 +640,11 @@ func (s *FetcherService) GetMailboxes(account models.EmailAccount) ([]models.Mai
 	var c *client.Client
 	var err error
 
+	// Check if MailProvider is nil
+	if account.MailProvider == nil {
+		return nil, fmt.Errorf("mail provider is not configured for account %s", account.EmailAddress)
+	}
+
 	serverAddr := fmt.Sprintf("%s:%d", account.MailProvider.IMAPServer, account.MailProvider.IMAPPort)
 
 	if account.Proxy != "" {
@@ -737,10 +747,10 @@ func (s *FetcherService) GetMailboxes(account models.EmailAccount) ([]models.Mai
 		// Get client_secret from global OAuth2 config (secure approach)
 		clientSecret := ""
 		oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
-		
+
 		var config *models.OAuth2GlobalConfig
 		var err error
-		
+
 		// Priority 1: Use OAuth2ProviderID if available (new multi-config support)
 		if account.OAuth2ProviderID != nil && *account.OAuth2ProviderID > 0 {
 			s.logger.Debug("Using OAuth2ProviderID %d for account %s", *account.OAuth2ProviderID, account.EmailAddress)
@@ -752,7 +762,7 @@ func (s *FetcherService) GetMailboxes(account models.EmailAccount) ([]models.Mai
 				s.logger.Warn("Failed to get config from OAuth2ProviderID %d for account %s: %v", *account.OAuth2ProviderID, account.EmailAddress, err)
 			}
 		}
-		
+
 		// Priority 2: Fallback to provider type lookup (backward compatibility)
 		if config == nil {
 			s.logger.Debug("Falling back to provider type lookup for %s", account.MailProvider.Type)
@@ -1036,6 +1046,11 @@ func convertAddresses(addresses []*imap.Address) models.StringSlice {
 func (s *FetcherService) VerifyConnection(account models.EmailAccount) error {
 	s.logger.Info("VerifyConnection called for account %s", account.EmailAddress)
 
+	// Check if MailProvider is nil
+	if account.MailProvider == nil {
+		return fmt.Errorf("mail provider is not configured for account %s", account.EmailAddress)
+	}
+
 	// For Gmail OAuth2 accounts, use Gmail API instead of IMAP
 	if account.AuthType == models.AuthTypeOAuth2 && account.MailProvider.Type == models.ProviderTypeGmail {
 		s.logger.Debug("Using Gmail API verification for OAuth2 account")
@@ -1224,10 +1239,10 @@ func (s *FetcherService) verifyGmailOAuth2Connection(account models.EmailAccount
 
 	// Get OAuth2 configuration
 	oauth2GlobalConfigRepo := repository.NewOAuth2GlobalConfigRepository(s.accountRepo.GetDB())
-	
+
 	var oauth2Config *models.OAuth2GlobalConfig
 	var err error
-	
+
 	// First try to get config by OAuth2ProviderID if it exists
 	if account.OAuth2ProviderID != nil {
 		s.logger.Debug("Using OAuth2ProviderID %d to get config for Gmail verification", *account.OAuth2ProviderID)
@@ -1236,7 +1251,7 @@ func (s *FetcherService) verifyGmailOAuth2Connection(account models.EmailAccount
 			s.logger.Warn("Failed to get config by OAuth2ProviderID %d: %v", *account.OAuth2ProviderID, err)
 		}
 	}
-	
+
 	// Fallback to provider type based lookup for backward compatibility
 	if oauth2Config == nil {
 		s.logger.Debug("Falling back to provider type based lookup for Gmail")
@@ -1246,12 +1261,12 @@ func (s *FetcherService) verifyGmailOAuth2Connection(account models.EmailAccount
 			return fmt.Errorf("failed to get OAuth2 config: %w", err)
 		}
 	}
-	
+
 	if oauth2Config == nil {
 		s.logger.Error("No OAuth2 config found")
 		return fmt.Errorf("no OAuth2 config found")
 	}
-	
+
 	s.logger.Debug("Using OAuth2 config: ID=%d, Name=%s", oauth2Config.ID, oauth2Config.Name)
 
 	// Get tokens from CustomSettings

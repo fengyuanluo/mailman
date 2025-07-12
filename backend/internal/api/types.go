@@ -87,16 +87,17 @@ type FetchEmailsRequest struct {
 // UpdateAccountRequest represents the request body for updating an email account
 // @Description Request body for updating an email account (partial update supported)
 type UpdateAccountRequest struct {
-	EmailAddress   *string          `json:"emailAddress,omitempty"`
-	AuthType       *models.AuthType `json:"authType,omitempty"`
-	Password       *string          `json:"password,omitempty"`
-	Token          *string          `json:"token,omitempty"`
-	MailProviderID *uint            `json:"mailProviderId,omitempty"`
-	Proxy          *string          `json:"proxy,omitempty"`
-	IsDomainMail   *bool            `json:"isDomainMail,omitempty"`
-	Domain         *string          `json:"domain,omitempty"`
-	CustomSettings *models.JSONMap  `json:"customSettings,omitempty"`
-	LastSyncAt     *time.Time       `json:"lastSyncAt,omitempty"`
+	EmailAddress     *string          `json:"emailAddress,omitempty"`
+	AuthType         *models.AuthType `json:"authType,omitempty"`
+	Password         *string          `json:"password,omitempty"`
+	Token            *string          `json:"token,omitempty"`
+	MailProviderID   *uint            `json:"mailProviderId,omitempty"`
+	OAuth2ProviderID *uint            `json:"oauth2ProviderId,omitempty"`
+	Proxy            *string          `json:"proxy,omitempty"`
+	IsDomainMail     *bool            `json:"isDomainMail,omitempty"`
+	Domain           *string          `json:"domain,omitempty"`
+	CustomSettings   *models.JSONMap  `json:"customSettings,omitempty"`
+	LastSyncAt       *time.Time       `json:"lastSyncAt,omitempty"`
 }
 
 // CreateAccountRequest represents the request body for creating an email account
@@ -106,7 +107,7 @@ type CreateAccountRequest struct {
 	AuthType         models.AuthType `json:"authType" binding:"required"`
 	Password         string          `json:"password,omitempty"`
 	Token            string          `json:"token,omitempty"`
-	MailProviderID   uint            `json:"mailProviderId" binding:"required"`
+	MailProviderID   *uint           `json:"mailProviderId,omitempty"`   // Make optional - only required for accounts that need predefined providers
 	OAuth2ProviderID *uint           `json:"oauth2ProviderId,omitempty"` // 关联特定的OAuth2配置
 	Proxy            string          `json:"proxy,omitempty"`
 	IsDomainMail     bool            `json:"isDomainMail"`

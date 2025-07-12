@@ -119,6 +119,11 @@ func migrateOAuth2GlobalConfig() error {
 		return DB.AutoMigrate(&models.OAuth2GlobalConfig{})
 	}
 
+	// 处理旧表结构迁移（移除provider_type唯一约束）
+	if err := migrateOAuth2ProviderTypeConstraint(); err != nil {
+		return fmt.Errorf("failed to migrate provider_type constraint: %w", err)
+	}
+
 	// 检查name字段是否存在
 	if !DB.Migrator().HasColumn(&models.OAuth2GlobalConfig{}, "name") {
 		// 添加name字段（允许为空）
@@ -134,6 +139,75 @@ func migrateOAuth2GlobalConfig() error {
 
 	// 检查是否需要更新其他字段
 	return DB.AutoMigrate(&models.OAuth2GlobalConfig{})
+}
+
+// migrateOAuth2ProviderTypeConstraint 处理provider_type字段的约束迁移
+func migrateOAuth2ProviderTypeConstraint() error {
+	// 检查是否存在provider_type的唯一约束（通过尝试插入重复数据来检测）
+	var count int64
+	DB.Model(&models.OAuth2GlobalConfig{}).Count(&count)
+	
+	// 如果表中有数据，先检查约束
+	if count > 0 {
+		// 获取现有的一条记录来测试
+		var existingConfig models.OAuth2GlobalConfig
+		if err := DB.First(&existingConfig).Error; err == nil {
+			// 尝试创建一个具有相同provider_type的临时记录来测试唯一约束
+			testConfig := models.OAuth2GlobalConfig{
+				Name:         "test_constraint_check",
+				ProviderType: existingConfig.ProviderType,
+				ClientID:     "test",
+				ClientSecret: "test",
+				RedirectURI:  "http://test.com",
+				Scopes:       models.StringSlice{"test"},
+				IsEnabled:    false,
+			}
+			
+			// 尝试插入，如果失败说明有唯一约束
+			if err := DB.Create(&testConfig).Error; err != nil {
+				if err.Error() == "UNIQUE constraint failed: o_auth2_global_configs.provider_type" {
+					// 存在唯一约束，需要重建表
+					return recreateOAuth2ConfigTable()
+				}
+			} else {
+				// 插入成功，删除测试记录
+				DB.Delete(&testConfig)
+			}
+		}
+	}
+	
+	return nil
+}
+
+// recreateOAuth2ConfigTable 重建OAuth2GlobalConfig表以移除provider_type的唯一约束
+func recreateOAuth2ConfigTable() error {
+	// 1. 备份现有数据
+	var existingConfigs []models.OAuth2GlobalConfig
+	if err := DB.Find(&existingConfigs).Error; err != nil {
+		return fmt.Errorf("failed to backup existing configs: %w", err)
+	}
+
+	// 2. 删除现有表
+	if err := DB.Migrator().DropTable(&models.OAuth2GlobalConfig{}); err != nil {
+		return fmt.Errorf("failed to drop existing table: %w", err)
+	}
+
+	// 3. 创建新表（使用当前模型定义，没有唯一约束）
+	if err := DB.AutoMigrate(&models.OAuth2GlobalConfig{}); err != nil {
+		return fmt.Errorf("failed to create new table: %w", err)
+	}
+
+	// 4. 恢复数据，但为每个记录添加name字段
+	for i, config := range existingConfigs {
+		if config.Name == "" {
+			config.Name = fmt.Sprintf("Default %s Config %d", config.ProviderType, i+1)
+		}
+		if err := DB.Create(&config).Error; err != nil {
+			return fmt.Errorf("failed to restore config %d: %w", config.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // GetDB returns the database instance

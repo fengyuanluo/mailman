@@ -440,6 +440,7 @@ export type OAuth2ProviderType = 'gmail' | 'outlook'
 
 export interface OAuth2GlobalConfig {
     id: number
+    name: string
     provider_type: OAuth2ProviderType
     client_id: string
     client_secret: string
@@ -451,6 +452,7 @@ export interface OAuth2GlobalConfig {
 }
 
 export interface CreateOAuth2ConfigRequest {
+    name: string
     provider_type: OAuth2ProviderType
     client_id: string
     client_secret: string

@@ -28,6 +28,9 @@ func NewRouter(handler *APIHandler, openAIHandler *OpenAIHandler) http.Handler {
 
 	// Account-specific email operations (moved to account-emails category)
 	apiRouter.HandleFunc("/account-emails/fetch/{id}", handler.FetchAndStoreEmailsHandler).Methods("POST")
+	// 新增：获取所有邮件的路由（必须放在参数路由之前）
+	apiRouter.HandleFunc("/account-emails/list/all", handler.GetAllEmailsHandler).Methods("GET")
+	apiRouter.HandleFunc("/account-emails/folders", handler.GetEmailFoldersHandler).Methods("GET")
 	apiRouter.HandleFunc("/account-emails/list/{id}", handler.GetEmailsHandler).Methods("GET")
 	apiRouter.HandleFunc("/account-emails/extract/{id}", handler.ExtractEmailsHandler).Methods("POST")
 	apiRouter.HandleFunc("/accounts/{id}/sync-records", handler.GetIncrementalSyncRecordsHandler).Methods("GET")

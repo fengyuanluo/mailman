@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useState, useCallback, useRef } from 'react'
-import { Search, Filter, Mail, Paperclip, Star, Archive, Trash2, RefreshCw, Code, X } from 'lucide-react'
+import { Search, Filter, Mail, Paperclip, Star, Archive, Trash2, RefreshCw, Code, X, ChevronDown, Printer } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { emailService, EmailSearchParams } from '@/services/email.service'
 import { emailAccountService } from '@/services/email-account.service'
@@ -24,41 +24,48 @@ function EmailItem({
         <div
             onClick={() => onSelect(email)}
             className={cn(
-                "cursor-pointer border-b border-gray-100 p-4 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800",
-                selected && "bg-primary-50 dark:bg-primary-900/20"
+                "p-4 cursor-pointer border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors",
+                selected && "bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-600"
             )}
         >
-            <div className="flex items-start space-x-3">
-                <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => { }}
-                    className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
+            <div className="flex items-start gap-3">
+                {/* 圆形图标 */}
+                <div className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0",
+                    selected ? "bg-blue-500 text-white" : "bg-gray-500 dark:bg-gray-600 text-white"
+                )}>
+                    📧
+                </div>
+
+                {/* 邮件信息 */}
                 <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {Array.isArray(email.From) ? email.From[0] : email.From || '未知发件人'}
-                        </h4>
-                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                    <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                            <span className={cn(
+                                "font-bold text-sm truncate",
+                                selected ? "text-blue-900 dark:text-blue-200" : "text-gray-900 dark:text-gray-100"
+                            )}>
+                                {Array.isArray(email.From) ? email.From[0] : email.From || '未知发件人'}
+                            </span>
+                            {email.Attachments && email.Attachments.length > 0 && (
+                                <div className="bg-yellow-500 text-white px-2 py-0.5 rounded-full text-xs font-medium">
+                                    📎 {email.Attachments.length}
+                                </div>
+                            )}
+                        </div>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
                             {formatDate(email.Date)}
                         </span>
                     </div>
-                    <p className="mt-1 text-sm font-medium text-gray-700 dark:text-gray-300 truncate">
+                    <p className={cn(
+                        "text-sm font-medium mb-1 truncate",
+                        selected ? "text-blue-900 dark:text-blue-200" : "text-gray-900 dark:text-gray-100"
+                    )}>
                         {email.Subject || '(无主题)'}
                     </p>
-                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 line-clamp-2">
+                    <p className="text-sm text-gray-600 dark:text-gray-300 truncate">
                         {truncate(email.Body || '', 100)}
                     </p>
-                    <div className="mt-2 flex items-center space-x-4 text-xs text-gray-500 dark:text-gray-400">
-                        {email.Attachments && email.Attachments.length > 0 && (
-                            <span className="flex items-center">
-                                <Paperclip className="mr-1 h-3 w-3" />
-                                {email.Attachments.length}
-                            </span>
-                        )}
-                        <span>{email.MailboxName}</span>
-                    </div>
                 </div>
             </div>
         </div>
@@ -69,70 +76,156 @@ function EmailItem({
 function EmailDetail({ email }: { email: Email | null }) {
     // 添加状态变量控制是否显示原始内容
     const [showRawContent, setShowRawContent] = useState(false);
+    // 添加收藏状态
+    const [isStarred, setIsStarred] = useState(false);
+
+    // 检查邮件是否已收藏
+    useEffect(() => {
+        if (email) {
+            const starredEmails = JSON.parse(localStorage.getItem('starredEmails') || '[]');
+            setIsStarred(starredEmails.includes(email.ID));
+        }
+    }, [email]);
+
+    // 切换收藏状态
+    const toggleStar = () => {
+        if (!email) return;
+
+        const starredEmails = JSON.parse(localStorage.getItem('starredEmails') || '[]');
+        let newStarredEmails;
+
+        if (isStarred) {
+            newStarredEmails = starredEmails.filter((id: number) => id !== email.ID);
+        } else {
+            newStarredEmails = [...starredEmails, email.ID];
+        }
+
+        localStorage.setItem('starredEmails', JSON.stringify(newStarredEmails));
+        setIsStarred(!isStarred);
+    };
+
+    // 打印邮件
+    const printEmail = () => {
+        if (!email) return;
+
+        const printContent = `
+            <html>
+                <head>
+                    <title>打印邮件 - ${email.Subject || '(无主题)'}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; margin: 20px; }
+                        .header { border-bottom: 2px solid #ddd; padding-bottom: 10px; margin-bottom: 20px; }
+                        .subject { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+                        .info { margin-bottom: 5px; }
+                        .label { font-weight: bold; }
+                        .content { margin-top: 20px; line-height: 1.6; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <div class="subject">${email.Subject || '(无主题)'}</div>
+                        <div class="info"><span class="label">发件人:</span> ${Array.isArray(email.From) ? email.From.join(', ') : email.From || '未知发件人'}</div>
+                        <div class="info"><span class="label">收件人:</span> ${Array.isArray(email.To) ? email.To.join(', ') : email.To || '未知收件人'}</div>
+                        <div class="info"><span class="label">时间:</span> ${formatDate(email.Date)}</div>
+                    </div>
+                    <div class="content">
+                        ${email.HTMLBody || `<pre>${email.Body || '(无内容)'}</pre>`}
+                    </div>
+                </body>
+            </html>
+        `;
+
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+            printWindow.document.write(printContent);
+            printWindow.document.close();
+            printWindow.print();
+        }
+    };
+
+    // 删除邮件（从当前列表中移除）
+    const deleteEmail = () => {
+        if (!email) return;
+
+        if (confirm('确定要删除这封邮件吗？\n注意：这只会从当前列表中移除，不会从服务器删除。')) {
+            // 触发父组件的删除逻辑
+            const event = new CustomEvent('deleteEmail', { detail: { emailId: email.ID } });
+            window.dispatchEvent(event);
+        }
+    };
     if (!email) {
         return (
-            <div className="flex h-full items-center justify-center">
-                <div className="text-center">
-                    <Mail className="mx-auto mb-4 h-12 w-12 text-gray-400" />
-                    <p className="text-gray-500 dark:text-gray-400">选择一封邮件查看详情</p>
-                </div>
+            <div className="flex h-full items-center justify-center text-gray-500 dark:text-gray-400">
+                选择一封邮件查看详情
             </div>
         )
     }
 
     return (
-        <div className="flex h-full flex-col">
-            {/* 邮件头部 */}
-            <div className="border-b border-gray-200 p-6 dark:border-gray-700">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                    {email.Subject || '(无主题)'}
-                </h2>
-                <div className="mt-4 space-y-2">
-                    <div className="flex items-center space-x-2 text-sm">
-                        <span className="text-gray-500 dark:text-gray-400">发件人:</span>
-                        <span className="text-gray-700 dark:text-gray-300">
-                            {Array.isArray(email.From) ? email.From.join(', ') : email.From || '未知发件人'}
-                        </span>
-                    </div>
-                    <div className="flex items-center space-x-2 text-sm">
-                        <span className="text-gray-500 dark:text-gray-400">收件人:</span>
-                        <span className="text-gray-700 dark:text-gray-300">
-                            {Array.isArray(email.To) ? email.To.join(', ') : email.To || '未知收件人'}
-                        </span>
-                    </div>
-                    <div className="flex items-center space-x-2 text-sm">
-                        <span className="text-gray-500 dark:text-gray-400">日期:</span>
-                        <span className="text-gray-700 dark:text-gray-300">{formatDate(email.Date)}</span>
+        <div className="h-full max-h-screen flex flex-col bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
+            {/* 邮件详情标题栏 */}
+            <div className="bg-gray-50 dark:bg-gray-700 px-6 py-4 border-b border-gray-200 dark:border-gray-600 flex-shrink-0">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 truncate max-w-[70%]" title={email.Subject || '(无主题)'}>
+                        {email.Subject || '(无主题)'}
+                    </h2>
+                    {/* 操作按钮 */}
+                    <div className="flex items-center gap-2">
+                        <button
+                            className={`w-8 h-8 rounded flex items-center justify-center transition-colors ${isStarred
+                                ? 'bg-yellow-100 dark:bg-yellow-900/30 hover:bg-yellow-200 dark:hover:bg-yellow-900/50'
+                                : 'bg-gray-100 dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500'
+                                }`}
+                            onClick={toggleStar}
+                            title={isStarred ? "取消收藏" : "收藏邮件"}
+                        >
+                            <Star className={`w-4 h-4 ${isStarred ? 'text-yellow-500 fill-current' : 'text-gray-600 dark:text-gray-300'}`} />
+                        </button>
+                        <button
+                            className="w-8 h-8 bg-gray-100 dark:bg-gray-600 rounded flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-500 transition-colors"
+                            onClick={printEmail}
+                            title="打印邮件"
+                        >
+                            <Printer className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                        </button>
+                        {/* 删除按钮已隐藏 */}
+                        <button
+                            className={`w-8 h-8 bg-gray-100 dark:bg-gray-600 rounded flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-500 transition-colors ${showRawContent ? 'bg-gray-200 dark:bg-gray-500' : ''}`}
+                            onClick={() => setShowRawContent(!showRawContent)}
+                            title="查看原始内容"
+                        >
+                            <Code className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                        </button>
                     </div>
                 </div>
+            </div>
 
-                {/* 操作按钮 */}
-                <div className="mt-4 flex space-x-2">
-                    <button className="rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800">
-                        <Star className="h-5 w-5" />
-                    </button>
-                    <button className="rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800">
-                        <Archive className="h-5 w-5" />
-                    </button>
-                    <button className="rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800">
-                        <Trash2 className="h-5 w-5" />
-                    </button>
-                    <button
-                        className={`rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 ${showRawContent ? 'bg-gray-100 dark:bg-gray-700' : ''}`}
-                        onClick={() => setShowRawContent(!showRawContent)}
-                        title="查看原始内容"
-                    >
-                        <Code className="h-5 w-5" />
-                    </button>
+            {/* 邮件信息 */}
+            <div className="px-6 py-4 space-y-2 text-sm border-b border-gray-200 dark:border-gray-600 flex-shrink-0 max-h-32 overflow-y-auto">
+                <div className="flex items-start">
+                    <span className="font-medium text-gray-700 dark:text-gray-300 flex-shrink-0 min-w-[60px]">发件人: </span>
+                    <span className="text-gray-600 dark:text-gray-400 truncate" title={Array.isArray(email.From) ? email.From.join(', ') : email.From || '未知发件人'}>
+                        {Array.isArray(email.From) ? email.From.join(', ') : email.From || '未知发件人'}
+                    </span>
+                </div>
+                <div className="flex items-start">
+                    <span className="font-medium text-gray-700 dark:text-gray-300 flex-shrink-0 min-w-[60px]">收件人: </span>
+                    <span className="text-gray-600 dark:text-gray-400 truncate" title={Array.isArray(email.To) ? email.To.join(', ') : email.To || '未知收件人'}>
+                        {Array.isArray(email.To) ? email.To.join(', ') : email.To || '未知收件人'}
+                    </span>
+                </div>
+                <div className="flex items-start">
+                    <span className="font-medium text-gray-700 dark:text-gray-300 flex-shrink-0 min-w-[60px]">时间: </span>
+                    <span className="text-gray-600 dark:text-gray-400">{formatDate(email.Date)}</span>
                 </div>
             </div>
 
             {/* 邮件内容 */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 p-6 overflow-y-auto min-h-0">
                 {showRawContent ? (
                     // 显示原始邮件内容
-                    <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 overflow-auto">
-                        <pre className="whitespace-pre-wrap text-xs font-mono text-gray-700 dark:text-gray-300">
+                    <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 overflow-auto max-h-full h-full">
+                        <pre className="whitespace-pre-wrap text-xs font-mono text-gray-700 dark:text-gray-300 break-words max-w-full">
                             {email.RawMessage ? email.RawMessage :
                                 `From: ${Array.isArray(email.From) ? email.From.join(', ') : email.From}
 To: ${Array.isArray(email.To) ? email.To.join(', ') : email.To}
@@ -147,55 +240,50 @@ ${email.HTMLBody ? '--- HTML Content ---\n\n' + email.HTMLBody + '\n\n--- Plain 
                         </pre>
                     </div>
                 ) : email.HTMLBody ? (
-                    <iframe
-                        srcDoc={email.HTMLBody}
-                        title="邮件内容"
-                        className="w-full h-full border-0 bg-white dark:bg-gray-800"
-                        sandbox="allow-same-origin allow-popups"
-                        onLoad={(e) => {
-                            // 调整iframe高度以适应内容
-                            try {
-                                const iframe = e.target as HTMLIFrameElement;
-                                if (iframe && iframe.contentWindow) {
-                                    const height = iframe.contentWindow.document.body.scrollHeight;
-                                    iframe.style.height = `${height}px`;
-                                }
-                            } catch (err) {
-                                console.error("无法调整iframe高度:", err);
-                            }
-                        }}
-                    />
+                    <div className="w-full h-full overflow-auto border border-gray-200 dark:border-gray-600 rounded">
+                        <iframe
+                            srcDoc={email.HTMLBody}
+                            title="邮件内容"
+                            className="w-full min-h-[400px] border-0 bg-white dark:bg-gray-800"
+                            sandbox="allow-same-origin allow-popups"
+                            style={{ height: '100%', maxHeight: '80vh' }}
+                        />
+                    </div>
                 ) : (
-                    <p className="whitespace-pre-wrap text-gray-700 dark:text-gray-300">
-                        {email.Body || '(无内容)'}
-                    </p>
+                    <div className="overflow-auto max-h-full h-full">
+                        <p className="whitespace-pre-wrap text-gray-700 dark:text-gray-300 break-words max-w-full">
+                            {email.Body || '(无内容)'}
+                        </p>
+                    </div>
                 )}
+            </div>
 
-                {/* 附件 */}
-                {email.Attachments && email.Attachments.length > 0 && (
-                    <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
-                        <h3 className="mb-3 text-sm font-medium text-gray-900 dark:text-white">
-                            附件 ({email.Attachments.length})
-                        </h3>
-                        <div className="space-y-2">
-                            {email.Attachments.map((attachment, index) => (
-                                <div
-                                    key={attachment.id || index}
-                                    className="flex items-center space-x-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-800"
-                                >
-                                    <Paperclip className="h-4 w-4 text-gray-400" />
-                                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                                        {attachment.filename}
-                                    </span>
+            {/* 附件区域 */}
+            {email.Attachments && email.Attachments.length > 0 && (
+                <div className="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-600">
+                    <div className="mb-2">
+                        <span className="font-bold text-sm text-gray-700 dark:text-gray-300">
+                            附件 ({email.Attachments.length}):
+                        </span>
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                        {email.Attachments.map((attachment, index) => (
+                            <div
+                                key={attachment.id || index}
+                                className="bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-500 cursor-pointer"
+                            >
+                                <div className="flex items-center gap-2">
+                                    <Paperclip className="w-4 h-4" />
+                                    <span>{attachment.filename}</span>
                                     <span className="text-xs text-gray-500 dark:text-gray-400">
                                         ({Math.round(attachment.size / 1024)} KB)
                                     </span>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        ))}
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     )
 }
@@ -207,7 +295,6 @@ export default function EmailsTab() {
     const [selectedAccount, setSelectedAccount] = useState<number | null>(null)
     const [selectedAccountLabel, setSelectedAccountLabel] = useState<string>('')
     const [emails, setEmails] = useState<Email[]>([])
-    // 添加一个状态变量，用于跟踪是否应该跳过账户选择
     const [skipAccountSelection, setSkipAccountSelection] = useState(false)
     const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
     const [loading, setLoading] = useState(true)
@@ -215,8 +302,9 @@ export default function EmailsTab() {
     const [syncing, setSyncing] = useState(false)
     const [searchQuery, setSearchQuery] = useState('')
     const [showSyncModal, setShowSyncModal] = useState(false)
-    // 添加筛选面板状态
     const [showFilterPanel, setShowFilterPanel] = useState(false)
+    const [folders, setFolders] = useState<string[]>([])
+    const [foldersLoading, setFoldersLoading] = useState(false)
     const [filterOptions, setFilterOptions] = useState({
         startDate: '',
         endDate: '',
@@ -500,419 +588,185 @@ export default function EmailsTab() {
                 }
             }
         } catch (error) {
-            console.error('Failed to load accounts:', error);
-            setHasMoreAccounts(false);
+            console.error('Failed to load accounts:', error)
         } finally {
-            setAccountsLoading(false);
+            setAccountsLoading(false)
         }
     }
 
-    // 处理账户列表滚动
     const handleAccountListScroll = () => {
-        if (!accountListRef.current || accountsLoading || !hasMoreAccounts) return;
-
-        const { scrollTop, scrollHeight, clientHeight } = accountListRef.current;
-        // 当滚动到底部时（预留20px缓冲区）加载更多
-        if (scrollHeight - scrollTop - clientHeight < 20) {
-            setCurrentPage(prev => prev + 1);
-            loadAccounts(currentPage + 1);
+        if (accountListRef.current && hasMoreAccounts && !accountsLoading) {
+            const { scrollTop, scrollHeight, clientHeight } = accountListRef.current;
+            if (scrollTop + clientHeight >= scrollHeight - 10) {
+                console.log('账户列表触发滚动加载，当前页:', currentPage, '下一页:', currentPage + 1);
+                setCurrentPage(currentPage + 1);
+                loadAccounts(currentPage + 1);
+            }
         }
     };
 
-    // 搜索查询变化时，重置状态并执行搜索
+    // 加载文件夹列表
+    const loadFolders = async () => {
+        setFoldersLoading(true);
+        try {
+            const response = await emailService.getEmailFolders();
+            console.log('文件夹API响应:', response);
+
+            // 正确解析API返回的数据格式: {"count":2,"folders":["INBOX","[Gmail]/所有邮件"]}
+            if (response && response.folders && Array.isArray(response.folders)) {
+                setFolders(response.folders);
+            } else if (response && response.data && response.data.folders && Array.isArray(response.data.folders)) {
+                setFolders(response.data.folders);
+            } else if (response && Array.isArray(response.data)) {
+                setFolders(response.data);
+            } else if (response && Array.isArray(response)) {
+                setFolders(response);
+            } else {
+                console.warn('文件夹数据格式不正确:', response);
+                setFolders(['INBOX', 'Sent', 'Drafts', 'Trash']); // 默认文件夹
+            }
+        } catch (error) {
+            console.error('加载文件夹失败:', error);
+            setFolders(['INBOX', 'Sent', 'Drafts', 'Trash']); // 默认文件夹
+        } finally {
+            setFoldersLoading(false);
+        }
+    };
+
     useEffect(() => {
-        // 如果有全局变量中的switchTabData，不要触发搜索
-        if ((window as any).switchTabData) {
-            return;
+        console.log('[EmailsTab] 首次加载组件时运行初始化逻辑');
+
+        // 加载文件夹列表
+        loadFolders();
+
+        // 优先从LocalStorage获取保存的账户信息
+        const savedAccount = getAccountFromStorage();
+
+        if (savedAccount) {
+            console.log('[EmailsTab] 从localStorage获取到账户信息:', savedAccount);
+            setSelectedAccount(savedAccount.id);
+            setSelectedAccountLabel(savedAccount.email);
+            // 设置跳过账户选择的标记，避免loadAccounts覆盖这个设置
+            setSkipAccountSelection(true);
+        } else {
+            // 没有保存的账户，默认加载所有邮件
+            console.log('[EmailsTab] 没有保存的账户，默认加载所有邮件');
+            loadEmails(1, true);
         }
 
-        // 如果是从账户管理页面切换过来的，不要触发搜索
-        if ((window as any).__fromAccountsTab) {
-            return;
-        }
-
-        // 检查是否应该跳过账户选择
-        if (skipAccountSelection) {
-            return;
-        }
-
+        // 设置2秒延迟，然后加载账户列表
         const timer = setTimeout(() => {
-            setCurrentPage(1);
-            loadAccounts(1, true); // 以初始加载模式执行
-        }, 300);
+            console.log('[EmailsTab] 2秒延迟后加载账户列表');
+            loadAccounts(1, true);
+        }, 2000);
 
         return () => clearTimeout(timer);
-    }, [accountSearchQuery, skipAccountSelection]); // 添加skipAccountSelection作为依赖项
+    }, []);
 
-
-    // 添加基于to_query的搜索函数
     const searchEmailsByToQuery = async (email: string, page = 1, isInitialLoad = false) => {
-        console.log('===> 执行邮箱专用搜索函数, 邮箱:', email)
+        console.log('🔍 使用邮箱地址搜索邮件:', email, 'page:', page);
 
-        // 强制转换为字符串确保安全
-        const emailStr = String(email).trim()
-
-        if (!emailStr) {
-            console.error('邮箱地址为空，无法执行搜索')
-            return
-        }
         if (isInitialLoad) {
-            setLoading(true)
-            setEmailsCurrentPage(1)
+            setLoading(true);
         } else {
-            setEmailsLoading(true)
+            setEmailsLoading(true);
         }
 
         try {
-            const limit = 20 // 每页加载数量
-            const offset = (page - 1) * limit
+            const limit = 20;
+            const offset = (page - 1) * limit;
 
-            // 构建搜索参数，确保to_query一定存在
-            const searchParams: EmailSearchParams = {
-                to_query: emailStr,
-                limit: limit,
-                offset: offset,
-                sort_by: 'date_desc'
-            }
-
-            console.log('构建邮箱专用搜索请求:', searchParams)
-
-            // 直接调用backend的/emails/search API
-            const response = await emailService.searchEmails(searchParams)
-
-            console.log('搜索邮箱API原始响应:', response)
-
-            // 详细记录response的结构
-            if (response) {
-                console.log('响应状态:', response.status)
-                console.log('响应数据类型:', typeof response.data)
-                if (response.data) {
-                    console.log('响应数据结构:', Object.keys(response.data))
-
-                    // 检查是否包含搜索条件回显
-                    if (response.data.search_criteria) {
-                        console.log('搜索条件回显:', response.data.search_criteria)
-                    }
-                }
-            }
-
-            console.log('使用to_query搜索结果:', response)
-
-            // 处理搜索结果...
-            let emailsData = null
-
-            // 首先检查响应格式，后端返回格式应该是：{ emails: [...] }
-            if (response && response.data && response.data.emails && Array.isArray(response.data.emails)) {
-                console.log('找到了正确的emails数组结构')
-                emailsData = response.data.emails
-            } else if (response && response.data && Array.isArray(response.data)) {
-                console.log('直接使用response.data作为邮件数组')
-                emailsData = response.data
-            } else if (response && Array.isArray(response)) {
-                console.log('直接使用response作为邮件数组')
-                emailsData = response
-            } else {
-                console.log('尝试在response中查找任何可能的数组')
-                // 递归查找任何可能的响应数组
-                const findArray = (obj: any, path = ''): any[] | null => {
-                    if (!obj || typeof obj !== 'object') return null
-
-                    // 如果找到了数组并且看起来像emails（检查第一个元素是否有常见字段）
-                    if (Array.isArray(obj) && obj.length > 0 &&
-                        (obj[0].Subject !== undefined || obj[0].From !== undefined)) {
-                        console.log(`在${path}找到可能的邮件数组`)
-                        return obj
-                    }
-
-                    // 递归查找所有对象属性
-                    for (const key in obj) {
-                        const result = findArray(obj[key], `${path}.${key}`)
-                        if (result) return result
-                    }
-
-                    return null
-                }
-
-                // 先尝试在response.data中查找
-                if (response && response.data) {
-                    emailsData = findArray(response.data, 'response.data')
-                }
-
-                // 如果还没找到，尝试在整个response中查找
-                if (!emailsData && response) {
-                    emailsData = findArray(response, 'response')
-                }
-            }
-
-            if (emailsData && emailsData.length > 0) {
-                // 确保数据格式正确
-                const processedEmails = emailsData.map((email: any) => ({
-                    ...email,
-                    // 确保关键字段存在
-                    ID: email.ID,
-                    From: email.From || ['未知发件人'],
-                    To: email.To || ['未知收件人'],
-                    Subject: email.Subject || '',
-                    Date: email.Date || new Date().toISOString(),
-                    Body: email.Body || '',
-                    HTMLBody: email.HTMLBody || '',
-                    MailboxName: email.MailboxName || 'INBOX'
-                }))
-
-                // 如果是初始加载或重置搜索，则替换数据
-                if (isInitialLoad || page === 1) {
-                    setEmails(processedEmails)
-                } else {
-                    // 否则追加数据（滚动加载模式）
-                    setEmails(prev => [...prev, ...processedEmails])
-                }
-
-                // 更新分页状态
-                setHasMoreEmails(emailsData.length >= limit)
-                setEmailsCurrentPage(page)
-            } else {
-                console.error('无法找到有效的邮件数组:', response)
-                if (isInitialLoad) {
-                    setEmails([])
-                }
-                setHasMoreEmails(false)
-            }
-        } catch (error: any) {
-            console.error('❌ Failed to search emails by to_query:', error)
-            console.error('错误详情:', {
-                message: error?.message,
-                response: error?.response,
-                status: error?.response?.status,
-                data: error?.response?.data
-            })
-
-            // 显示错误提示
-            const errorMessage = error?.response?.data?.error || error?.message || '搜索失败'
-            console.error('用户可见错误:', errorMessage)
-
-            if (isInitialLoad) {
-                setEmails([])
-            }
-            setHasMoreEmails(false)
-        } finally {
-            if (isInitialLoad) {
-                setLoading(false)
-            } else {
-                setEmailsLoading(false)
-            }
-        }
-    }
-
-    // 处理筛选选项变化
-    const handleFilterChange = (field: string, value: string) => {
-        setFilterOptions(prev => ({
-            ...prev,
-            [field]: value
-        }))
-    }
-
-    // 应用筛选
-    const applyFilters = () => {
-        // 使用筛选选项构建搜索参数
-        const searchParams: EmailSearchParams = {
-            limit: 20,
-            offset: 0,
-            sort_by: 'date_desc'
-        }
-
-        // 添加非空筛选条件
-        if (filterOptions.startDate) searchParams.start_date = filterOptions.startDate
-        if (filterOptions.endDate) searchParams.end_date = filterOptions.endDate
-        if (filterOptions.fromQuery) searchParams.from_query = filterOptions.fromQuery
-        if (filterOptions.toQuery) searchParams.to_query = filterOptions.toQuery
-        if (filterOptions.ccQuery) searchParams.cc_query = filterOptions.ccQuery
-        if (filterOptions.subjectQuery) searchParams.subject_query = filterOptions.subjectQuery
-        if (filterOptions.bodyQuery) searchParams.body_query = filterOptions.bodyQuery
-        if (filterOptions.mailbox) searchParams.mailbox = filterOptions.mailbox
-
-        // 如果有搜索框关键字，也添加
-        if (searchQuery) searchParams.keyword = searchQuery
-
-        // 执行搜索
-        setLoading(true)
-        if (selectedAccount) {
-            // 有选中账户，使用账户特定搜索
-            emailService.getEmails(selectedAccount, searchParams)
-                .then(response => {
-                    processEmailsResponse(response, true)
-                })
-                .catch(error => {
-                    console.error('Filter search failed:', error)
-                    setEmails([])
-                })
-                .finally(() => {
-                    setLoading(false)
-                })
-        } else {
-            // 无选中账户，使用全局搜索
-            emailService.searchEmails(searchParams)
-                .then(response => {
-                    processEmailsResponse(response, true)
-                })
-                .catch(error => {
-                    console.error('Filter search failed:', error)
-                    setEmails([])
-                })
-                .finally(() => {
-                    setLoading(false)
-                })
-        }
-
-        // 关闭筛选面板
-        setShowFilterPanel(false)
-    }
-
-    // 重置筛选
-    const resetFilters = () => {
-        setFilterOptions({
-            startDate: '',
-            endDate: '',
-            fromQuery: '',
-            toQuery: '',
-            ccQuery: '',
-            subjectQuery: '',
-            bodyQuery: '',
-            mailbox: ''
-        })
-    }
-
-    // 处理并解析邮件响应数据的辅助函数
-    const processEmailsResponse = (response: any, isInitialLoad = false) => {
-        let emailsData = null
-        if (response && Array.isArray(response)) {
-            emailsData = response
-        } else if (response && response.emails && Array.isArray(response.emails)) {
-            emailsData = response.emails
-        } else if (response && response.data && Array.isArray(response.data)) {
-            emailsData = response.data
-        } else {
-            // 尝试寻找任何可能的数组类型字段
-            for (const key in response) {
-                if (response[key] && Array.isArray(response[key])) {
-                    emailsData = response[key]
-                    console.log(`使用response.${key}作为邮件数组`)
-                    break
-                }
-            }
-        }
-
-        if (emailsData && emailsData.length > 0) {
-            // 确保数据格式正确
-            const processedEmails = emailsData.map((email: any) => ({
-                ...email,
-                // 确保关键字段存在
-                ID: email.ID,
-                From: email.From || ['未知发件人'],
-                To: email.To || ['未知收件人'],
-                Subject: email.Subject || '',
-                Date: email.Date || new Date().toISOString(),
-                Body: email.Body || '',
-                HTMLBody: email.HTMLBody || '',
-                MailboxName: email.MailboxName || 'INBOX'
-            }))
-
-            setEmails(processedEmails)
-            setHasMoreEmails(emailsData.length >= 20)
-            setEmailsCurrentPage(1)
-        } else {
-            console.error('无法找到有效的邮件数组:', response)
-            setEmails([])
-            setHasMoreEmails(false)
-        }
-    }
-
-    const loadEmails = useCallback(async (page = 1, isInitialLoad = false) => {
-        if (!selectedAccount) return
-
-        if (isInitialLoad) {
-            setLoading(true)
-            setEmailsCurrentPage(1)
-        } else {
-            setEmailsLoading(true)
-        }
-
-        try {
-            const limit = 20 // 每页加载数量
-            const offset = (page - 1) * limit
-
-            const response = await emailService.getEmails(selectedAccount, {
+            // 搜索发送给指定邮箱的邮件
+            const params: EmailSearchParams = {
                 limit: limit,
                 offset: offset,
                 sort_by: 'date_desc',
-                keyword: searchQuery || undefined
-            })
-            console.log('API Response:', response)
-            console.log('API Response type:', typeof response)
-            console.log('API Response keys:', response ? Object.keys(response) : 'no response')
+                to_query: email // 使用to_query参数搜索收件人
+            };
 
-            // 检查API响应中是否直接包含邮件数组（而不是在emails字段中）
+            console.log('邮箱搜索参数:', params);
+
+            // 调用搜索API
+            const response = await emailService.getAllEmails(params);
+            console.log('邮箱搜索API响应:', response);
+
             let emailsData = null;
-            if (response && Array.isArray(response)) {
-                emailsData = response;
-                console.log('使用响应本身作为邮件数组');
-            } else if (response && response.emails && Array.isArray(response.emails)) {
-                emailsData = response.emails;
-                console.log('使用response.emails作为邮件数组');
-            } else if (response && response.data && Array.isArray(response.data)) {
-                emailsData = response.data;
-                console.log('使用response.data作为邮件数组');
-            } else {
-                // 尝试寻找任何可能的数组类型字段
-                for (const key in response) {
-                    if (response[key] && Array.isArray(response[key])) {
-                        emailsData = response[key];
-                        console.log(`使用response.${key}作为邮件数组`);
-                        break;
-                    }
-                }
-            }
 
-            if (emailsData && emailsData.length > 0) {
-                console.log('找到邮件数据，长度:', emailsData.length);
-                console.log('第一封邮件示例:', emailsData[0]);
-
-                // 确保数据格式正确
-                const processedEmails = emailsData.map((email: any) => ({
-                    ...email,
-                    // 确保关键字段存在
-                    ID: email.ID,
-                    From: email.From || ['未知发件人'],
-                    To: email.To || ['未知收件人'],
-                    Subject: email.Subject || '',
-                    Date: email.Date || new Date().toISOString(),
-                    Body: email.Body || '',
-                    HTMLBody: email.HTMLBody || '',
-                    MailboxName: email.MailboxName || 'INBOX'
-                }));
-
-                console.log('Processed emails:', processedEmails);
-
-                // 如果是初始加载或重置搜索，则替换数据
-                if (isInitialLoad || page === 1) {
-                    setEmails(processedEmails);
+            if (response && typeof response === 'object') {
+                // 根据不同的响应结构处理数据
+                if (response.emails) {
+                    emailsData = response.emails; // 如果response有emails字段
+                } else if (response.data) {
+                    emailsData = response.data; // 如果response有data字段
+                } else if (Array.isArray(response)) {
+                    emailsData = response; // 如果response本身就是数组
                 } else {
-                    // 否则追加数据（滚动加载模式）
-                    setEmails(prev => [...prev, ...processedEmails]);
+                    console.warn('无法识别的响应格式:', response);
+                    emailsData = [];
                 }
 
-                // 更新分页状态
-                setHasMoreEmails(emailsData.length >= limit);
-                setEmailsCurrentPage(page);
+                console.log('提取的邮件数据:', emailsData);
+
+                // 数据后处理
+                if (emailsData && Array.isArray(emailsData)) {
+                    // 辅助函数：递归查找数组字段
+                    const findArray = (obj: any, path = ''): any[] | null => {
+                        if (Array.isArray(obj)) {
+                            console.log(`找到数组字段 ${path}:`, obj);
+                            return obj;
+                        }
+                        if (obj && typeof obj === 'object') {
+                            for (const [key, value] of Object.entries(obj)) {
+                                const result = findArray(value, path ? `${path}.${key}` : key);
+                                if (result) return result;
+                            }
+                        }
+                        return null;
+                    };
+
+                    // 处理每个邮件对象，确保From、To等字段是数组
+                    const processedEmails = emailsData.map((email: any) => ({
+                        ...email,
+                        From: findArray(email.From) || [email.From].filter(Boolean),
+                        To: findArray(email.To) || [email.To].filter(Boolean),
+                        Cc: findArray(email.Cc) || (email.Cc ? [email.Cc] : []),
+                        Bcc: findArray(email.Bcc) || (email.Bcc ? [email.Bcc] : [])
+                    }));
+
+                    console.log('处理后的邮件数据:', processedEmails);
+
+                    if (isInitialLoad || page === 1) {
+                        setEmails(processedEmails);
+                        setEmailsCurrentPage(1);
+                    } else {
+                        setEmails(prev => [...prev, ...processedEmails]);
+                        setEmailsCurrentPage(page);
+                    }
+
+                    setHasMoreEmails(processedEmails.length >= limit);
+
+                    // 如果有邮件，自动选择第一封
+                    if (processedEmails.length > 0 && isInitialLoad) {
+                        setSelectedEmail(processedEmails[0]);
+                    }
+
+                    console.log(`✅ 邮箱搜索成功，找到 ${processedEmails.length} 封邮件`);
+                } else {
+                    console.warn('邮件数据不是数组:', emailsData);
+                    if (isInitialLoad) {
+                        setEmails([]);
+                    }
+                    setHasMoreEmails(false);
+                }
             } else {
-                console.error('无法找到有效的邮件数组:', response);
+                console.warn('无效的API响应:', response);
                 if (isInitialLoad) {
                     setEmails([]);
                 }
                 setHasMoreEmails(false);
-                return;
             }
         } catch (error) {
-            console.error('Failed to load emails:', error);
+            console.error('邮箱搜索失败:', error);
             if (isInitialLoad) {
                 setEmails([]);
             }
@@ -924,160 +778,380 @@ export default function EmailsTab() {
                 setEmailsLoading(false);
             }
         }
-    }, [selectedAccount, searchQuery]);
+    };
 
-    // 处理邮件列表滚动
-    const handleEmailsListScroll = () => {
-        if (!emailsListRef.current || emailsLoading || !hasMoreEmails || !selectedAccount) return;
+    const handleFilterChange = (field: string, value: string) => {
+        setFilterOptions(prev => ({
+            ...prev,
+            [field]: value
+        }))
+    }
 
-        const { scrollTop, scrollHeight, clientHeight } = emailsListRef.current;
-        // 当滚动到底部时（预留20px缓冲区）加载更多
-        if (scrollHeight - scrollTop - clientHeight < 30) {
-            const nextPage = emailsCurrentPage + 1;
-            setEmailsCurrentPage(nextPage);
-            loadEmails(nextPage);
+    const applyFilters = () => {
+        // 检查是否在邮箱搜索模式
+        if (isEmailSearchMode && emailSearchTarget) {
+            console.log('应用筛选 - 邮箱搜索模式，目标邮箱:', emailSearchTarget);
+            // 在邮箱搜索模式下，使用特殊的搜索逻辑
+            searchEmailsByToQuery(emailSearchTarget, 1, true);
+        } else if (selectedAccount) {
+            console.log('应用筛选 - 账户模式，选中账户:', selectedAccount);
+            // 构建筛选参数
+            const filterParams: EmailSearchParams = {
+                limit: 20,
+                offset: 0,
+                sort_by: 'date_desc'
+            }
+
+            // 添加各种筛选条件
+            if (filterOptions.startDate) filterParams.start_date = filterOptions.startDate
+            if (filterOptions.endDate) filterParams.end_date = filterOptions.endDate
+            if (filterOptions.fromQuery) filterParams.from_query = filterOptions.fromQuery
+            if (filterOptions.toQuery) filterParams.to_query = filterOptions.toQuery
+            if (filterOptions.ccQuery) filterParams.cc_query = filterOptions.ccQuery
+            if (filterOptions.subjectQuery) filterParams.subject_query = filterOptions.subjectQuery
+            if (filterOptions.bodyQuery) filterParams.body_query = filterOptions.bodyQuery
+            if (filterOptions.mailbox) filterParams.mailbox = filterOptions.mailbox
+            if (searchQuery) filterParams.keyword = searchQuery
+
+            setLoading(true)
+            emailService.getEmails(selectedAccount, filterParams)
+                .then(response => {
+                    processEmailsResponse(response, true)
+                })
+                .catch(error => {
+                    console.error('Failed to apply filters:', error)
+                    setEmails([])
+                })
+                .finally(() => {
+                    setLoading(false)
+                })
+        } else {
+            console.log('应用筛选 - 全局模式');
+            // 全局搜索，传递所有筛选参数
+            const filterParams: EmailSearchParams = {
+                limit: 20,
+                offset: 0,
+                sort_by: 'date_desc'
+            }
+
+            // 添加各种筛选条件
+            if (filterOptions.startDate) filterParams.start_date = filterOptions.startDate
+            if (filterOptions.endDate) filterParams.end_date = filterOptions.endDate
+            if (filterOptions.fromQuery) filterParams.from_query = filterOptions.fromQuery
+            if (filterOptions.toQuery) filterParams.to_query = filterOptions.toQuery
+            if (filterOptions.ccQuery) filterParams.cc_query = filterOptions.ccQuery
+            if (filterOptions.subjectQuery) filterParams.subject_query = filterOptions.subjectQuery
+            if (filterOptions.bodyQuery) filterParams.body_query = filterOptions.bodyQuery
+            if (filterOptions.mailbox) filterParams.mailbox = filterOptions.mailbox
+            if (searchQuery) filterParams.keyword = searchQuery
+
+            console.log('全局搜索筛选参数:', filterParams);
+
+            setLoading(true)
+            emailService.getAllEmails(filterParams)
+                .then(response => {
+                    processEmailsResponse(response, true)
+                })
+                .catch(error => {
+                    console.error('Failed to apply global filters:', error)
+                    setEmails([])
+                })
+                .finally(() => {
+                    setLoading(false)
+                })
+        }
+
+        // 关闭筛选面板
+        setShowFilterPanel(false)
+        setEmailsCurrentPage(1)
+        setHasMoreEmails(true)
+    }
+
+    const resetFilters = () => {
+        setFilterOptions({
+            startDate: '',
+            endDate: '',
+            fromQuery: '',
+            toQuery: '',
+            ccQuery: '',
+            subjectQuery: '',
+            bodyQuery: '',
+            mailbox: ''
+        })
+        setSearchQuery('')
+        setIsEmailSearchMode(false)
+        setEmailSearchTarget(null)
+        loadEmails(1, true)
+    }
+
+    const processEmailsResponse = (response: any, isInitialLoad = false) => {
+        console.log('处理邮件API响应:', response);
+
+        let emailsData = null;
+
+        if (response && typeof response === 'object') {
+            // 根据不同的响应结构处理数据
+            if (response.emails) {
+                emailsData = response.emails; // 如果response有emails字段
+            } else if (response.data) {
+                emailsData = response.data; // 如果response有data字段
+            } else if (Array.isArray(response)) {
+                emailsData = response; // 如果response本身就是数组
+            } else {
+                console.warn('无法识别的响应格式:', response);
+                emailsData = [];
+            }
+
+            console.log('提取的邮件数据:', emailsData);
+
+            // 数据后处理
+            if (emailsData && Array.isArray(emailsData)) {
+                // 处理每个邮件对象，确保From、To等字段是数组
+                const processedEmails = emailsData.map((email: any) => ({
+                    ...email,
+                    From: Array.isArray(email.From) ? email.From : [email.From].filter(Boolean),
+                    To: Array.isArray(email.To) ? email.To : [email.To].filter(Boolean),
+                    Cc: Array.isArray(email.Cc) ? email.Cc : (email.Cc ? [email.Cc] : []),
+                    Bcc: Array.isArray(email.Bcc) ? email.Bcc : (email.Bcc ? [email.Bcc] : [])
+                }));
+
+                if (isInitialLoad) {
+                    setEmails(processedEmails);
+                    setEmailsCurrentPage(1);
+                } else {
+                    setEmails(prev => [...prev, ...processedEmails]);
+                }
+
+                // 如果有邮件且是初始加载，自动选择第一封
+                if (processedEmails.length > 0 && isInitialLoad) {
+                    setSelectedEmail(processedEmails[0]);
+                }
+            } else {
+                console.warn('邮件数据不是数组:', emailsData);
+            }
         }
     };
 
-    // 组件挂载时的初始化
+    const loadEmails = useCallback(async (page = 1, isInitialLoad = false) => {
+        console.log('[loadEmails] 开始加载邮件，page:', page, 'isInitialLoad:', isInitialLoad);
+        console.log('[loadEmails] 当前状态 - selectedAccount:', selectedAccount, 'isEmailSearchMode:', isEmailSearchMode, 'emailSearchTarget:', emailSearchTarget);
+
+        // 检查是否在邮箱搜索模式
+        if (isEmailSearchMode && emailSearchTarget) {
+            console.log('[loadEmails] 当前在邮箱搜索模式，调用searchEmailsByToQuery');
+            searchEmailsByToQuery(emailSearchTarget, page, isInitialLoad);
+            return;
+        }
+
+        if (isInitialLoad) {
+            setLoading(true);
+        } else {
+            setEmailsLoading(true);
+        }
+
+        try {
+            const limit = 20;
+            const offset = (page - 1) * limit;
+
+            let response;
+            const params = {
+                limit: limit,
+                offset: offset,
+                sort_by: 'date_desc',
+                keyword: searchQuery || undefined
+            };
+
+            if (selectedAccount) {
+                console.log('[loadEmails] 使用选中账户加载邮件:', selectedAccount);
+                response = await emailService.getEmails(selectedAccount, params);
+            } else {
+                console.log('[loadEmails] 使用全局模式加载邮件');
+                response = await emailService.getAllEmails(params);
+            }
+
+            let emailsData = null;
+
+            if (response && typeof response === 'object') {
+                // 根据不同的响应结构处理数据
+                if (response.emails) {
+                    emailsData = response.emails; // 如果response有emails字段
+                } else if (response.data) {
+                    emailsData = response.data; // 如果response有data字段
+                } else if (Array.isArray(response)) {
+                    emailsData = response; // 如果response本身就是数组
+                } else {
+                    console.warn('无法识别的响应格式:', response);
+                    emailsData = [];
+                }
+
+                // 数据后处理
+                if (emailsData && Array.isArray(emailsData)) {
+                    // 处理每个邮件对象，确保From、To等字段是数组
+                    const processedEmails = emailsData.map((email: any) => ({
+                        ...email,
+                        From: Array.isArray(email.From) ? email.From : [email.From].filter(Boolean),
+                        To: Array.isArray(email.To) ? email.To : [email.To].filter(Boolean),
+                        Cc: Array.isArray(email.Cc) ? email.Cc : (email.Cc ? [email.Cc] : []),
+                        Bcc: Array.isArray(email.Bcc) ? email.Bcc : (email.Bcc ? [email.Bcc] : [])
+                    }));
+
+                    console.log('[loadEmails] 处理后的邮件数据:', processedEmails.length, '条');
+
+                    if (isInitialLoad || page === 1) {
+                        setEmails(processedEmails);
+                        setEmailsCurrentPage(1);
+                    } else {
+                        setEmails(prev => [...prev, ...processedEmails]);
+                        setEmailsCurrentPage(page);
+                    }
+
+                    setHasMoreEmails(processedEmails.length >= limit);
+
+                    // 如果有邮件且是初始加载，自动选择第一封
+                    if (processedEmails.length > 0 && isInitialLoad) {
+                        setSelectedEmail(processedEmails[0]);
+                    }
+                } else {
+                    console.warn('[loadEmails] 邮件数据不是数组:', emailsData);
+                    if (isInitialLoad) {
+                        setEmails([]);
+                    }
+                    setHasMoreEmails(false);
+                }
+            } else {
+                console.warn('[loadEmails] 无效的API响应:', response);
+                if (isInitialLoad) {
+                    setEmails([]);
+                }
+                setHasMoreEmails(false);
+            }
+        } catch (error) {
+            console.error('[loadEmails] 加载邮件失败:', error);
+            if (isInitialLoad) {
+                setEmails([]);
+            }
+            setHasMoreEmails(false);
+        } finally {
+            if (isInitialLoad) {
+                setLoading(false);
+            } else {
+                setEmailsLoading(false);
+            }
+        }
+    }, [selectedAccount, searchQuery, isEmailSearchMode, emailSearchTarget]);
+
+    const handleEmailsListScroll = () => {
+        if (emailsListRef.current && hasMoreEmails && !emailsLoading) {
+            const { scrollTop, scrollHeight, clientHeight } = emailsListRef.current;
+            if (scrollTop + clientHeight >= scrollHeight - 10) {
+                loadEmails(emailsCurrentPage + 1);
+            }
+        }
+    };
+
     useEffect(() => {
-        // 首先检查全局变量（作为向后兼容）
-        const switchTabData = (window as any).switchTabData;
-        if (switchTabData && switchTabData.selectedAccountId && switchTabData.selectedAccountEmail) {
-            console.log('[EmailsTab] 组件挂载时检测到全局变量中的 switchTabData:', switchTabData);
-
-            // 直接调用我们的回调函数处理数据
-            handleAccountSelection(switchTabData);
-
-            // 清除全局变量，避免影响后续操作
-            delete (window as any).switchTabData;
-
-            return;
+        // 当选中账户改变时，重新加载邮件
+        if (selectedAccount !== null) {
+            console.log('[useEffect] selectedAccount 改变，重新加载邮件:', selectedAccount);
+            // 重置邮箱搜索模式
+            setIsEmailSearchMode(false);
+            setEmailSearchTarget(null);
+            loadEmails(1, true);
         }
+    }, [selectedAccount, loadEmails]);
 
-        // 其次检查localStorage中是否有保存的账户信息
-        const savedAccount = getAccountFromStorage();
-        if (savedAccount) {
-            console.log('[EmailsTab] 组件挂载时从localStorage获取到账户信息:', savedAccount);
-
-            // 设置选中的账户
-            setSelectedAccount(savedAccount.id);
-            setSelectedAccountLabel(savedAccount.email);
-
-            // 清除localStorage，避免影响后续操作
-            clearAccountFromStorage();
-
-            // 设置跳过标记，防止其他useEffect触发loadAccounts
-            setSkipAccountSelection(true);
-
-            return;
-        }
-
-        // 如果不是从账户管理页面切换过来的，且没有跳过选择标记，才加载账户
-        if (!(window as any).__fromAccountsTab && !skipAccountSelection) {
-            loadAccounts();
-        }
-
-        // 点击页面其他地方关闭下拉框
+    // 添加点击外部关闭下拉框的逻辑
+    useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
-            if (accountDropdownOpen) {
+            const target = e.target as Element;
+            if (!target.closest('.account-dropdown')) {
                 setAccountDropdownOpen(false);
             }
         };
 
-        document.addEventListener('click', handleClickOutside);
-        return () => {
-            document.removeEventListener('click', handleClickOutside);
-        };
-    }, []);
-
-    // 选择账户变更时，重置邮件列表并加载第一页
-    useEffect(() => {
-        if (selectedAccount && !isEmailSearchMode) {  // 添加检查：非邮箱搜索模式才加载账户邮件
-            // 如果是从账户管理页面切换过来的，确保使用正确的账户ID
-            if (skipAccountSelection) {
-                console.log('[EmailsTab] 账户变更(来自账户管理页面)，加载指定账户邮件:', selectedAccount);
-            } else {
-                console.log('[EmailsTab] 账户变更，加载邮件:', selectedAccount);
+        // 处理删除邮件事件
+        const handleDeleteEmail = (e: CustomEvent) => {
+            const { emailId } = e.detail;
+            setEmails(prevEmails => prevEmails.filter(email => email.ID !== emailId));
+            // 如果删除的是当前选中的邮件，清除选中状态
+            if (selectedEmail && selectedEmail.ID === emailId) {
+                setSelectedEmail(null);
             }
+        };
 
-            setEmailsCurrentPage(1);
-            setHasMoreEmails(true);
+        document.addEventListener('mousedown', handleClickOutside);
+        window.addEventListener('deleteEmail', handleDeleteEmail as EventListener);
+
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            window.removeEventListener('deleteEmail', handleDeleteEmail as EventListener);
+        };
+    }, [selectedEmail]);
+
+    // 当搜索查询改变时，加载邮件
+    useEffect(() => {
+        if (selectedAccount !== null || isEmailSearchMode) {
             loadEmails(1, true);
         }
-    }, [selectedAccount, loadEmails, skipAccountSelection, isEmailSearchMode]);  // 添加 isEmailSearchMode 依赖
+    }, [searchQuery, loadEmails, selectedAccount, isEmailSearchMode]);
 
-    // 搜索查询变更时，重置并重新加载
+    // 监听账户列表变化，在找到账户时触发相应逻辑
     useEffect(() => {
-        if (selectedAccount) {
-            setEmailsCurrentPage(1);
-            setHasMoreEmails(true);
-            const timer = setTimeout(() => {
-                loadEmails(1, true);
-            }, 300);
-
-            return () => clearTimeout(timer);
+        // 检查是否有待处理的账户选择
+        const pendingAccountId = (window as any).__pendingSelectedAccountId;
+        if (pendingAccountId && accounts.length > 0) {
+            const account = accounts.find(acc => acc.id === pendingAccountId);
+            if (account) {
+                console.log('[useEffect] 在新的账户列表中找到待选择的账户:', account.emailAddress);
+                setSelectedAccount(pendingAccountId);
+                setSelectedAccountLabel(account.emailAddress);
+                delete (window as any).__pendingSelectedAccountId;
+            }
         }
-    }, [searchQuery, selectedAccount]);
+    }, [accounts]);
 
-    // 删除重复的 switchTab 事件监听器，已经在第231行有处理
-
-    // 删除处理全局变量的 useEffect，已经在第231行的监听器中处理
-
-    // 加载所有账户以查找特定账户
     const loadAllAccountsForSelection = async (targetAccountId: number) => {
-        console.log('[EmailsTab] 开始加载所有账户以查找目标账户:', targetAccountId);
-        setAccountsLoading(true);
+        console.log('[loadAllAccountsForSelection] 尝试加载所有账户以找到目标账户:', targetAccountId);
         try {
-            let page = 1;
+            let allAccounts: EmailAccount[] = [];
+            let currentPage = 1;
             let hasMore = true;
 
-            // 循环加载所有页面
             while (hasMore) {
                 const response = await emailAccountService.getAccountsPaginated({
-                    page: page,
-                    limit: 10,
+                    page: currentPage,
+                    limit: 50, // 使用较大的限制以减少请求次数
                     search: ''
                 });
 
+                const pageAccounts = response.data;
+                allAccounts = [...allAccounts, ...pageAccounts];
+
                 // 检查是否找到目标账户
-                const targetAccount = response.data.find(acc => acc.id === targetAccountId);
+                const targetAccount = pageAccounts.find(acc => acc.id === targetAccountId);
                 if (targetAccount) {
-                    console.log('[EmailsTab] 在第', page, '页找到目标账户:', targetAccount.emailAddress);
-
-                    // 只更新选中状态，不要调用 setAccounts(allAccounts)
-                    setSelectedAccount(targetAccountId);
-                    setSelectedAccountLabel(targetAccount.emailAddress);
-                    setAccountDropdownOpen(false);
-                    delete (window as any).__pendingSelectedAccountId;
-
-                    // 如果需要，可以将找到的账户添加到当前列表中（而不是替换整个列表）
+                    console.log('[loadAllAccountsForSelection] 找到目标账户:', targetAccount.emailAddress);
                     setAccounts(prev => {
-                        const exists = prev.find(acc => acc.id === targetAccountId);
-                        if (!exists) {
-                            console.log('[EmailsTab] 将目标账户添加到当前列表');
-                            return [...prev, targetAccount];
-                        }
-                        return prev;
+                        // 去重合并
+                        const existingIds = new Set(prev.map(acc => acc.id));
+                        const newAccounts = allAccounts.filter(acc => !existingIds.has(acc.id));
+                        return [...prev, ...newAccounts];
                     });
-                    break;
+                    setSelectedAccount(targetAccount.id);
+                    setSelectedAccountLabel(targetAccount.emailAddress);
+                    return;
                 }
 
-                hasMore = page < (response.total_pages || 1);
-                page++;
+                hasMore = pageAccounts.length > 0 && currentPage < (response.total_pages || 1);
+                currentPage++;
             }
 
-            if (!(window as any).__pendingSelectedAccountId) {
-                console.log('[EmailsTab] 成功找到并选择了目标账户');
-            } else {
-                console.log('[EmailsTab] 未能找到目标账户');
-                delete (window as any).__pendingSelectedAccountId;
-            }
+            // 如果遍历完所有账户都没找到，设置一个全局变量用于后续处理
+            console.warn('[loadAllAccountsForSelection] 未找到目标账户ID:', targetAccountId);
+            (window as any).__pendingSelectedAccountId = targetAccountId;
+
         } catch (error) {
-            console.error('[EmailsTab] 加载账户失败:', error);
-            delete (window as any).__pendingSelectedAccountId;
-        } finally {
-            setAccountsLoading(false);
+            console.error('[loadAllAccountsForSelection] 加载账户失败:', error);
         }
     };
 
@@ -1086,526 +1160,616 @@ export default function EmailsTab() {
         setShowSyncModal(true);
     };
 
-    const handleSyncConfirm = async () => {
-        if (!selectedAccount) return;
-
-        setSyncing(true);
-        setShowSyncModal(false);
-
-        try {
-            await emailAccountService.syncAccount(selectedAccount);
-            setEmailsCurrentPage(1);
-            setHasMoreEmails(true);
-            await loadEmails(1, true);
-        } catch (error) {
-            console.error('Failed to sync emails:', error);
-            alert('同步失败');
-        } finally {
-            setSyncing(false);
-        }
-    };
 
     return (
-        <div className="flex h-[calc(100vh-12rem)] -mx-6">
-            {/* 左侧邮件列表 */}
-            <div className="w-96 border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-                {/* 账户选择和搜索 */}
-                <div className="border-b border-gray-200 p-4 dark:border-gray-700">
-                    {/* 邮箱搜索模式提示 */}
-                    {isEmailSearchMode && emailSearchTarget && (
-                        <div className="mb-2 flex items-center gap-2 rounded-lg bg-blue-50 p-2 text-sm dark:bg-blue-900/20">
-                            <Mail className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                            <span className="text-blue-700 dark:text-blue-300">
-                                正在搜索发送给 {emailSearchTarget} 的邮件
-                            </span>
-                            <button
-                                onClick={() => {
-                                    setIsEmailSearchMode(false);
-                                    setEmailSearchTarget(null);
-                                    setAccountSearchQuery('');
-                                    setSelectedAccountLabel('');
-                                    setSelectedAccount(null); // 清除选中的账户
-                                    setEmails([]); // 清空邮件列表
-                                    setSearchQuery(''); // 清空搜索框
-                                    loadAccounts(1, true);
-                                }}
-                                className="ml-auto text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200"
-                            >
-                                <X className="h-4 w-4" />
-                            </button>
-                        </div>
-                    )}
-
-                    <div className="relative">
-                        {/* 账户选择下拉框 */}
-                        <input
-                            type="text"
-                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                            placeholder={isEmailSearchMode ? "邮箱搜索模式" : "选择账户或输入邮箱地址"}
-                            value={accountSearchQuery || selectedAccountLabel}
-                            onChange={(e) => {
-                                const value = e.target.value;
-                                setAccountSearchQuery(value);
-                                setAccountDropdownOpen(true);
-
-                                // 清除之前的定时器
-                                if (accountSearchDebounceTimer.current) {
-                                    clearTimeout(accountSearchDebounceTimer.current);
-                                }
-
-                                // 如果清空了输入，也清空选择
-                                if (!value) {
-                                    setSelectedAccount(null);
-                                    setSelectedAccountLabel('');
-                                    // 用户手动修改输入，重置跳过选择标记
-                                    setSkipAccountSelection(false);
-                                    // 退出邮箱搜索模式
-                                    setIsEmailSearchMode(false);
-                                    setEmailSearchTarget(null);
-                                    setEmails([]); // 清空邮件列表
-                                    // 重新加载账户列表
-                                    loadAccounts(1, true);
-                                } else {
-                                    // 检查是否是邮箱格式
-                                    const isEmail = isValidEmail(value);
-                                    console.log('账户搜索框输入是否为邮箱:', isEmail, value);
-
-                                    // 设置防抖定时器
-                                    accountSearchDebounceTimer.current = setTimeout(() => {
-                                        console.log('账户搜索防抖触发，搜索:', value, '是否邮箱:', isEmail);
-
-                                        if (isEmail) {
-                                            // 如果是邮箱格式，直接切换到邮箱搜索模式
-                                            console.log('🔄 检测到邮箱格式，切换到邮箱搜索模式');
-                                            setIsEmailSearchMode(true);
-                                            setEmailSearchTarget(value);
-                                            setSelectedAccount(null);
-                                            setSelectedAccountLabel('');
-                                            setAccountDropdownOpen(false);
-                                            // 执行邮箱搜索
-                                            searchEmailsByToQuery(value, 1, true);
-                                        } else {
-                                            // 普通文本，执行账户搜索
-                                            setIsEmailSearchMode(false);
-                                            setEmailSearchTarget(null);
+        <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-900">
+            {/* 统一筛选区域 */}
+            <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg mx-5 mt-5 mb-4 p-4">
+                {/* 第一行：账户选择 + 快速筛选标签 + 同步按钮 */}
+                <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-4">
+                        {/* 账户选择 */}
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-gray-700 dark:text-gray-300">账户:</span>
+                            <div className="relative account-dropdown">
+                                <div
+                                    className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 min-w-[200px] cursor-pointer flex items-center justify-between"
+                                    onClick={() => {
+                                        setAccountDropdownOpen(!accountDropdownOpen);
+                                        if (!accountDropdownOpen) {
+                                            setCurrentPage(1);
                                             loadAccounts(1, true);
                                         }
-                                    }, 500); // 500ms 防抖延迟
-                                }
-                            }}
-                            onFocus={() => setAccountDropdownOpen(true)}
-                            onBlur={(e) => {
-                                // 延迟关闭，以便点击下拉选项时能够触发
-                                setTimeout(() => {
-                                    // 如果没有选中账户且输入框有值，尝试匹配第一个结果
-                                    // 但在邮箱搜索模式下不要自动选择
-                                    if (!selectedAccount && accountSearchQuery && accounts.length > 0 && !isEmailSearchMode) {
-                                        const firstMatch = accounts[0];
-                                        setSelectedAccount(firstMatch.id);
-                                        setSelectedAccountLabel(firstMatch.emailAddress);
-                                        setAccountSearchQuery('');
-                                    }
-                                    setAccountDropdownOpen(false);
-                                }, 200);
-                            }}
-                        />
-
-                        {/* 下拉内容 - 在邮箱搜索模式下不显示 */}
-                        {accountDropdownOpen && accounts.length > 0 && !isEmailSearchMode && (
-                            <div className="absolute z-10 mt-1 w-full rounded-md bg-white shadow-lg dark:bg-gray-700">
-                                {/* 账户列表 - 添加滚动事件和ref */}
-                                <div
-                                    ref={accountListRef}
-                                    className="max-h-60 overflow-y-auto py-1"
-                                    onScroll={handleAccountListScroll}
+                                    }}
                                 >
-                                    {/* 第一页提示 */}
-                                    {isFirstPage && !accountsLoading && (
-                                        <div className="px-3 py-1 text-xs text-center text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700">
-                                            已显示第一页
-                                        </div>
-                                    )}
+                                    <span>{selectedAccountLabel || '所有账户'}</span>
+                                    <div className="flex items-center gap-1">
+                                        {selectedAccount && (
+                                            <button
+                                                className="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 p-1"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setSelectedAccount(null);
+                                                    setSelectedAccountLabel('');
+                                                    setAccountSearchQuery('');
+                                                    clearAccountFromStorage();
+                                                    setIsEmailSearchMode(false);
+                                                    setEmailSearchTarget(null);
+                                                    // 加载所有邮件
+                                                    loadEmails(1, true);
+                                                }}
+                                                title="清空选择"
+                                            >
+                                                <X className="w-3 h-3" />
+                                            </button>
+                                        )}
+                                        <ChevronDown className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                    </div>
+                                </div>
 
-                                    {accounts.length > 0 ? (
-                                        accounts.map((account) => (
+                                {accountDropdownOpen && (
+                                    <div className="absolute top-full left-0 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 max-h-80 overflow-hidden">
+                                        <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+                                            <input
+                                                type="text"
+                                                placeholder="搜索账户..."
+                                                value={accountSearchQuery}
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                                                onChange={(e) => {
+                                                    const value = e.target.value;
+                                                    setAccountSearchQuery(value);
+
+                                                    // 防抖搜索
+                                                    if (accountSearchDebounceTimer.current) {
+                                                        clearTimeout(accountSearchDebounceTimer.current);
+                                                    }
+
+                                                    accountSearchDebounceTimer.current = setTimeout(() => {
+                                                        console.log('防抖搜索触发，搜索词:', value);
+                                                        setCurrentPage(1);
+                                                        loadAccounts(1, true);
+                                                    }, 300);
+                                                }}
+                                            />
+                                        </div>
+
+                                        <div
+                                            ref={accountListRef}
+                                            className="max-h-60 overflow-y-auto"
+                                            onScroll={handleAccountListScroll}
+                                        >
+                                            {/* 所有账户选项 */}
                                             <div
-                                                key={account.id}
-                                                className={`px-3 py-2 text-sm cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 ${selectedAccount === account.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''}`}
+                                                className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-sm font-medium text-blue-600 dark:text-blue-400"
                                                 onClick={() => {
-                                                    setSelectedAccount(account.id);
-                                                    setSelectedAccountLabel(account.emailAddress);
-                                                    setAccountSearchQuery(''); // 清空搜索框
+                                                    setSelectedAccount(null);
+                                                    setSelectedAccountLabel('');
                                                     setAccountDropdownOpen(false);
-                                                    // 用户手动选择账户，重置跳过选择标记
-                                                    setSkipAccountSelection(false);
+                                                    setAccountSearchQuery('');
+                                                    clearAccountFromStorage();
+                                                    setIsEmailSearchMode(false);
+                                                    setEmailSearchTarget(null);
+                                                    // 加载所有邮件
+                                                    loadEmails(1, true);
                                                 }}
                                             >
-                                                {account.emailAddress}
+                                                📨 所有账户
                                             </div>
-                                        ))
-                                    ) : !accountsLoading ? (
-                                        <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
-                                            未找到账户
-                                        </div>
-                                    ) : null}
 
-                                    {/* 加载状态 */}
-                                    {accountsLoading && (
-                                        <div className="flex justify-center py-2">
-                                            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"></div>
-                                        </div>
-                                    )}
+                                            {accounts.length > 0 ? (
+                                                accounts.map((account) => (
+                                                    <div
+                                                        key={account.id}
+                                                        className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-sm text-gray-900 dark:text-gray-100"
+                                                        onClick={() => {
+                                                            setSelectedAccount(account.id);
+                                                            setSelectedAccountLabel(account.emailAddress);
+                                                            setAccountDropdownOpen(false);
+                                                            setAccountSearchQuery('');
+                                                            saveAccountToStorage(account.id, account.emailAddress);
+                                                            setIsEmailSearchMode(false);
+                                                            setEmailSearchTarget(null);
+                                                        }}
+                                                    >
+                                                        {account.emailAddress}
+                                                    </div>
+                                                ))
+                                            ) : !accountsLoading ? (
+                                                <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                                                    没有找到账户
+                                                </div>
+                                            ) : null}
 
-                                    {/* 无更多数据提示 */}
-                                    {!accountsLoading && accounts.length > 0 && isLastPage && (
-                                        <div className="px-3 py-1 text-xs text-center text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700">
-                                            没有更多账户
+                                            {accountsLoading && (
+                                                <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                                                    加载中...
+                                                </div>
+                                            )}
+
+                                            {hasMoreAccounts && !accountsLoading && (
+                                                <div className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 text-center">
+                                                    向下滚动加载更多...
+                                                </div>
+                                            )}
                                         </div>
-                                    )}
-                                </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 快速筛选标签 */}
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">文件夹:</span>
+                            <div className="flex gap-1.5 flex-wrap">
+                                {foldersLoading ? (
+                                    <div className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400">
+                                        加载文件夹中...
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* 全部邮件按钮 */}
+                                        <button
+                                            className={cn(
+                                                "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
+                                                !filterOptions.mailbox
+                                                    ? "bg-blue-500 text-white"
+                                                    : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                                            )}
+                                            onClick={() => {
+                                                handleFilterChange('mailbox', '');
+                                                applyFilters();
+                                            }}
+                                        >
+                                            📨 全部
+                                        </button>
+
+                                        {/* 动态文件夹按钮 */}
+                                        {folders.map((folderName) => {
+                                            // 为文件夹添加合适的图标
+                                            const getFolderIcon = (name: string) => {
+                                                const lowerName = name.toLowerCase();
+                                                if (lowerName.includes('inbox') || lowerName.includes('收件')) return '📥';
+                                                if (lowerName.includes('sent') || lowerName.includes('已发')) return '📤';
+                                                if (lowerName.includes('draft') || lowerName.includes('草稿')) return '📝';
+                                                if (lowerName.includes('trash') || lowerName.includes('垃圾') || lowerName.includes('deleted')) return '🗑️';
+                                                if (lowerName.includes('spam') || lowerName.includes('垃圾邮件')) return '🚫';
+                                                if (lowerName.includes('junk')) return '📂';
+                                                return '📁';
+                                            };
+
+                                            return (
+                                                <button
+                                                    key={folderName}
+                                                    className={cn(
+                                                        "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
+                                                        filterOptions.mailbox === folderName
+                                                            ? "bg-blue-500 text-white"
+                                                            : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                                                    )}
+                                                    onClick={() => {
+                                                        handleFilterChange('mailbox', folderName);
+                                                        applyFilters();
+                                                    }}
+                                                >
+                                                    {getFolderIcon(folderName)} {folderName}
+                                                </button>
+                                            );
+                                        })}
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 同步按钮 - 只有选择了账户时才显示 */}
+                    {selectedAccount && (
+                        <button
+                            className="bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-700 text-white px-4 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                            onClick={handleSyncClick}
+                            disabled={syncing}
+                        >
+                            {syncing ? '同步中...' : '🔄 同步'}
+                        </button>
+                    )}
+                </div>
+
+                {/* 第二行：搜索框 + 高级筛选 + 活跃筛选指示器 */}
+                <div className="flex items-center gap-3">
+                    {/* 搜索框 */}
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">搜索:</span>
+                        <div className="relative">
+                            <Search className="w-4 h-4 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                            <input
+                                type="text"
+                                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-10 py-1.5 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 w-80"
+                                placeholder="搜索邮件内容、主题、发件人..."
+                                value={searchQuery}
+                                onChange={(e) => {
+                                    const value = e.target.value;
+                                    setSearchQuery(value);
+
+                                    // 防抖搜索
+                                    if (searchDebounceTimer.current) {
+                                        clearTimeout(searchDebounceTimer.current);
+                                    }
+
+                                    searchDebounceTimer.current = setTimeout(() => {
+                                        console.log('邮件搜索防抖触发，搜索词:', value);
+
+                                        // 检查是否是邮箱格式
+                                        const isEmail = isValidEmail(value);
+                                        console.log('输入是否为邮箱格式:', isEmail);
+
+                                        if (isEmail && value.trim()) {
+                                            // 如果是邮箱格式，切换到邮箱搜索模式
+                                            console.log('🔄 切换到邮箱搜索模式，目标邮箱:', value);
+                                            setIsEmailSearchMode(true);
+                                            setEmailSearchTarget(value.trim());
+                                            searchEmailsByToQuery(value.trim(), 1, true);
+                                        } else {
+                                            // 否则使用常规搜索
+                                            console.log('使用常规搜索模式');
+                                            setIsEmailSearchMode(false);
+                                            setEmailSearchTarget(null);
+                                            if (selectedAccount) {
+                                                loadEmails(1, true);
+                                            } else {
+                                                // 全局搜索
+                                                emailService.getAllEmails({
+                                                    limit: 20,
+                                                    offset: 0,
+                                                    sort_by: 'date_desc',
+                                                    keyword: value || undefined
+                                                })
+                                                    .then(response => {
+                                                        processEmailsResponse(response, true);
+                                                    })
+                                                    .catch(error => {
+                                                        console.error('全局搜索失败:', error);
+                                                        setEmails([]);
+                                                    });
+                                            }
+                                        }
+                                    }, 500); // 增加防抖延迟到500ms
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        const value = searchQuery.trim();
+                                        if (value) {
+                                            const isEmail = isValidEmail(value);
+                                            if (isEmail) {
+                                                console.log('回车键触发邮箱搜索:', value);
+                                                setIsEmailSearchMode(true);
+                                                setEmailSearchTarget(value);
+                                                searchEmailsByToQuery(value, 1, true);
+                                            } else {
+                                                console.log('回车键触发常规搜索:', value);
+                                                setIsEmailSearchMode(false);
+                                                setEmailSearchTarget(null);
+                                                if (selectedAccount) {
+                                                    loadEmails(1, true);
+                                                } else {
+                                                    emailService.getAllEmails({
+                                                        limit: 20,
+                                                        offset: 0,
+                                                        sort_by: 'date_desc',
+                                                        keyword: value
+                                                    })
+                                                        .then(response => {
+                                                            processEmailsResponse(response, true);
+                                                        })
+                                                        .catch(error => {
+                                                            console.error('全局搜索失败:', error);
+                                                            setEmails([]);
+                                                        });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }}
+                            />
+                        </div>
+
+                        {/* 搜索按钮 */}
+                        <button
+                            className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5"
+                            onClick={() => {
+                                const value = searchQuery.trim();
+                                console.log('手动触发搜索，搜索词:', value);
+
+                                // 检查是否是邮箱格式
+                                const isEmail = isValidEmail(value);
+
+                                if (isEmail && value) {
+                                    console.log('🔄 手动触发邮箱搜索模式，目标邮箱:', value);
+                                    setIsEmailSearchMode(true);
+                                    setEmailSearchTarget(value);
+                                    searchEmailsByToQuery(value, 1, true);
+                                } else {
+                                    console.log('手动触发常规搜索模式');
+                                    setIsEmailSearchMode(false);
+                                    setEmailSearchTarget(null);
+                                    if (selectedAccount) {
+                                        loadEmails(1, true);
+                                    } else {
+                                        // 全局搜索，应用所有筛选条件
+                                        const searchParams = {
+                                            limit: 20,
+                                            offset: 0,
+                                            sort_by: 'date_desc',
+                                            keyword: value || undefined,
+                                            // 应用筛选条件
+                                            mailbox: filterOptions.mailbox || undefined,
+                                            sender: filterOptions.fromQuery || undefined,
+                                            subject: filterOptions.subjectQuery || undefined,
+                                            body: filterOptions.bodyQuery || undefined,
+                                            to: filterOptions.toQuery || undefined,
+                                            cc: filterOptions.ccQuery || undefined,
+                                            start_date: filterOptions.startDate || undefined,
+                                            end_date: filterOptions.endDate || undefined
+                                        };
+
+                                        console.log('手动搜索参数:', searchParams);
+
+                                        emailService.getAllEmails(searchParams)
+                                            .then(response => {
+                                                processEmailsResponse(response, true);
+                                            })
+                                            .catch(error => {
+                                                console.error('手动搜索失败:', error);
+                                                setEmails([]);
+                                            });
+                                    }
+                                }
+                            }}
+                        >
+                            🔍 搜索
+                        </button>
+                    </div>
+
+                    {/* 高级筛选按钮 */}
+                    <button
+                        className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5"
+                        onClick={() => setShowFilterPanel(!showFilterPanel)}
+                    >
+                        🔧 高级筛选
+                    </button>
+
+                    {/* 活跃筛选指示器 */}
+                    <div className="flex gap-2">
+                        {(filterOptions.startDate || filterOptions.endDate) && (
+                            <div className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 border border-yellow-300 dark:border-yellow-600 px-3 py-2 rounded text-xs font-medium flex items-center gap-2">
+                                <span>📅 {filterOptions.startDate && filterOptions.endDate
+                                    ? `${filterOptions.startDate} 至 ${filterOptions.endDate}`
+                                    : filterOptions.startDate
+                                        ? `从 ${filterOptions.startDate}`
+                                        : `到 ${filterOptions.endDate}`}</span>
+                                <button
+                                    className="hover:text-red-600 dark:hover:text-red-400"
+                                    onClick={() => {
+                                        handleFilterChange('startDate', '');
+                                        handleFilterChange('endDate', '');
+                                        applyFilters();
+                                    }}
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        )}
+                        {filterOptions.fromQuery && (
+                            <div className="bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 border border-blue-300 dark:border-blue-600 px-3 py-2 rounded text-xs font-medium flex items-center gap-2">
+                                <span>发件人: {filterOptions.fromQuery}</span>
+                                <button
+                                    className="hover:text-red-600 dark:hover:text-red-400"
+                                    onClick={() => {
+                                        handleFilterChange('fromQuery', '');
+                                        applyFilters();
+                                    }}
+                                >
+                                    ✕
+                                </button>
                             </div>
                         )}
                     </div>
+                </div>
+            </div>
 
-                    <div className="mt-3 relative">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                        <input
-                            type="text"
-                            placeholder="搜索邮件..."
-                            value={searchQuery}
-                            onChange={(e) => {
-                                const value = e.target.value
-                                setSearchQuery(value)
-                                console.log('搜索框输入变化:', value)
-
-                                // 清除之前的定时器
-                                if (searchDebounceTimer.current) {
-                                    clearTimeout(searchDebounceTimer.current)
-                                }
-
-                                // 直接检查是否是邮箱格式
-                                const isEmail = isValidEmail(value)
-                                console.log('是否是邮箱格式:', isEmail)
-
-                                // 设置防抖处理，300ms后执行搜索
-                                searchDebounceTimer.current = setTimeout(() => {
-                                    console.log('防抖触发搜索，输入值:', value, '是否邮箱:', isEmail)
-
-                                    if (isEmail) {
-                                        // 检测到有效邮箱地址，切换到邮箱搜索模式
-                                        console.log('✅ 检测到有效邮箱，切换到邮箱搜索模式:', value)
-                                        setIsEmailSearchMode(true)
-                                        setEmailSearchTarget(value)
-                                        setSelectedAccount(null)
-                                        setSelectedAccountLabel('')
-                                        // 执行邮箱搜索
-                                        searchEmailsByToQuery(value, 1, true)
-                                    } else if (isEmailSearchMode && emailSearchTarget) {
-                                        // 当前处于邮箱搜索模式，支持额外的关键词筛选
-                                        console.log('📧 当前处于邮箱搜索模式，添加关键词筛选:', emailSearchTarget, value)
-                                        if (value) {
-                                            setLoading(true)
-                                            emailService.searchEmails({
-                                                to_query: emailSearchTarget,
-                                                keyword: value,
-                                                limit: 20,
-                                                offset: 0,
-                                                sort_by: 'date_desc'
-                                            })
-                                                .then(response => {
-                                                    processEmailsResponse(response, true)
-                                                })
-                                                .catch(error => {
-                                                    console.error('邮箱搜索失败:', error)
-                                                    setEmails([])
-                                                })
-                                                .finally(() => {
-                                                    setLoading(false)
-                                                })
-                                        } else {
-                                            // 如果搜索框为空，重新执行邮箱搜索
-                                            searchEmailsByToQuery(emailSearchTarget, 1, true)
-                                        }
-                                    } else if (value) {
-                                        console.log('⚡ 执行普通关键词搜索:', value)
-                                        // 普通关键词搜索
-                                        if (selectedAccount && !isEmailSearchMode) {
-                                            loadEmails(1, true)
-                                        } else {
-                                            // 没有选中账户时，使用全局搜索
-                                            setLoading(true)
-                                            emailService.searchEmails({
-                                                keyword: value,
-                                                limit: 20,
-                                                offset: 0,
-                                                sort_by: 'date_desc'
-                                            })
-                                                .then(response => {
-                                                    processEmailsResponse(response, true)
-                                                })
-                                                .catch(error => {
-                                                    console.error('搜索失败:', error)
-                                                    setEmails([])
-                                                })
-                                                .finally(() => {
-                                                    setLoading(false)
-                                                })
-                                        }
-                                    } else {
-                                        // 搜索框为空时，重置为初始状态
-                                        if (selectedAccount && !isEmailSearchMode) {
-                                            loadEmails(1, true)
-                                        } else if (isEmailSearchMode && emailSearchTarget) {
-                                            // 邮箱搜索模式下，重新执行邮箱搜索
-                                            searchEmailsByToQuery(emailSearchTarget, 1, true)
-                                        } else {
-                                            setEmails([])
-                                        }
-                                    }
-                                }, 300)
-                            }}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    console.log('按下Enter键，当前搜索词:', searchQuery)
-                                    // 清除定时器，立即执行搜索
-                                    if (searchDebounceTimer.current) {
-                                        clearTimeout(searchDebounceTimer.current)
-                                        searchDebounceTimer.current = null
-                                    }
-
-                                    // 检查是否是有效的邮箱地址
-                                    const isEmail = isValidEmail(searchQuery)
-                                    console.log('Enter键处理 - 是否是邮箱格式:', isEmail)
-
-                                    if (isEmail) {
-                                        console.log('✅ Enter键 - 检测到邮箱格式，执行邮箱专用搜索:', searchQuery)
-                                        // 使用to_query搜索
-                                        searchEmailsByToQuery(searchQuery, 1, true)
-                                    } else if (selectedAccount) {
-                                        console.log('⚡ Enter键 - 执行账户邮件搜索')
-                                        loadEmails(1, true)
-                                    } else {
-                                        // 全局搜索
-                                        emailService.searchEmails({
-                                            keyword: searchQuery,
-                                            limit: 20,
-                                            offset: 0,
-                                            sort_by: 'date_desc'
-                                        })
-                                            .then(response => {
-                                                processEmailsResponse(response, true)
-                                            })
-                                            .catch(error => {
-                                                console.error('搜索失败:', error)
-                                                setEmails([])
-                                            })
-                                            .finally(() => {
-                                                setLoading(false)
-                                            })
-                                    }
-                                }
-                            }}
-                            className="w-full rounded-lg border border-gray-300 bg-gray-50 py-2 pl-9 pr-3 text-sm focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                        />
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between">
-                        <button
-                            onClick={() => setShowFilterPanel(!showFilterPanel)}
-                            className={`flex items-center space-x-1 text-sm ${showFilterPanel ? 'text-primary-600' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'}`}
-                        >
-                            <Filter className="h-4 w-4" />
-                            <span>筛选</span>
-                        </button>
-                        <div className="flex space-x-2">
-                            <button
-                                onClick={handleSyncClick}
-                                disabled={syncing || !selectedAccount}
-                                className="flex items-center space-x-1 text-sm text-primary-600 hover:text-primary-700 disabled:text-gray-400"
-                            >
-                                <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
-                                <span>{syncing ? '同步中' : '同步'}</span>
-                            </button>
-
+            {/* 高级筛选面板 */}
+            {showFilterPanel && (
+                <div className="mx-5 mb-5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+                    <h3 className="text-lg font-bold mb-4 text-gray-900 dark:text-gray-100">高级筛选选项</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">开始日期</label>
+                            <input
+                                type="date"
+                                value={filterOptions.startDate}
+                                onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            />
                         </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">结束日期</label>
+                            <input
+                                type="date"
+                                value={filterOptions.endDate}
+                                onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">发件人</label>
+                            <input
+                                type="text"
+                                value={filterOptions.fromQuery}
+                                onChange={(e) => handleFilterChange('fromQuery', e.target.value)}
+                                placeholder="输入发件人邮箱或关键词..."
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">收件人</label>
+                            <input
+                                type="text"
+                                value={filterOptions.toQuery}
+                                onChange={(e) => handleFilterChange('toQuery', e.target.value)}
+                                placeholder="输入收件人邮箱或关键词..."
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">抄送</label>
+                            <input
+                                type="text"
+                                value={filterOptions.ccQuery}
+                                onChange={(e) => handleFilterChange('ccQuery', e.target.value)}
+                                placeholder="输入抄送邮箱或关键词..."
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">主题</label>
+                            <input
+                                type="text"
+                                value={filterOptions.subjectQuery}
+                                onChange={(e) => handleFilterChange('subjectQuery', e.target.value)}
+                                placeholder="输入主题关键词..."
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">正文</label>
+                            <input
+                                type="text"
+                                value={filterOptions.bodyQuery}
+                                onChange={(e) => handleFilterChange('bodyQuery', e.target.value)}
+                                placeholder="输入正文关键词..."
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">邮箱文件夹</label>
+                            <select
+                                value={filterOptions.mailbox}
+                                onChange={(e) => handleFilterChange('mailbox', e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            >
+                                <option value="">所有文件夹</option>
+                                <option value="INBOX">收件箱</option>
+                                <option value="Sent">已发送</option>
+                                <option value="Drafts">草稿</option>
+                                <option value="Trash">垃圾箱</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="flex gap-3 mt-6">
+                        <button
+                            className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded text-sm font-medium transition-colors"
+                            onClick={applyFilters}
+                        >
+                            应用筛选
+                        </button>
+                        <button
+                            className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded text-sm font-medium transition-colors"
+                            onClick={resetFilters}
+                        >
+                            重置
+                        </button>
+                        <button
+                            className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 px-6 py-2 rounded text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                            onClick={() => setShowFilterPanel(false)}
+                        >
+                            取消
+                        </button>
                     </div>
                 </div>
+            )}
 
-                {/* 筛选面板 */}
-                {showFilterPanel && (
-                    <div className="border-b border-gray-200 p-4 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/50">
-                        <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    开始日期
-                                </label>
-                                <input
-                                    type="date"
-                                    value={filterOptions.startDate}
-                                    onChange={(e) => handleFilterChange('startDate', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    结束日期
-                                </label>
-                                <input
-                                    type="date"
-                                    value={filterOptions.endDate}
-                                    onChange={(e) => handleFilterChange('endDate', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    发件人
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="筛选发件人..."
-                                    value={filterOptions.fromQuery}
-                                    onChange={(e) => handleFilterChange('fromQuery', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    收件人
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="筛选收件人..."
-                                    value={filterOptions.toQuery}
-                                    onChange={(e) => handleFilterChange('toQuery', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    抄送
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="筛选抄送..."
-                                    value={filterOptions.ccQuery}
-                                    onChange={(e) => handleFilterChange('ccQuery', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    主题
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="筛选主题..."
-                                    value={filterOptions.subjectQuery}
-                                    onChange={(e) => handleFilterChange('subjectQuery', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    内容
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="筛选邮件内容..."
-                                    value={filterOptions.bodyQuery}
-                                    onChange={(e) => handleFilterChange('bodyQuery', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    文件夹
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="筛选文件夹..."
-                                    value={filterOptions.mailbox}
-                                    onChange={(e) => handleFilterChange('mailbox', e.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                                />
-                            </div>
-                        </div>
-                        <div className="mt-4 flex justify-end space-x-2">
-                            <button
-                                onClick={resetFilters}
-                                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
-                            >
-                                重置
-                            </button>
-                            <button
-                                onClick={applyFilters}
-                                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-500 dark:hover:bg-primary-600"
-                            >
-                                应用筛选
-                            </button>
+            {/* 主要内容区域 - 左右分栏 */}
+            <div className="flex-1 flex mx-5 mb-5 gap-5 min-h-0 max-h-[calc(100vh-360px)]">
+                {/* 左侧邮件列表 */}
+                <div className="w-2/5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-col min-h-0">
+                    <div className="bg-gray-50 dark:bg-gray-700 px-4 py-3 border-b border-gray-200 dark:border-gray-600 rounded-t-lg">
+                        <div className="flex items-center justify-between">
+                            <h2 className="font-bold text-gray-900 dark:text-gray-100">
+                                📋 邮件列表 {isEmailSearchMode && emailSearchTarget && (
+                                    <span className="text-sm font-normal text-blue-600 dark:text-blue-400">
+                                        (搜索: {emailSearchTarget})
+                                    </span>
+                                )}
+                            </h2>
+                            {emails.length > 0 && (
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    共 {emails.length} 封邮件
+                                </p>
+                            )}
                         </div>
                     </div>
-                )}
 
-                {/* 邮件列表 */}
-                <div
-                    ref={emailsListRef}
-                    className="h-[calc(100%-10rem)] overflow-y-auto"
-                    onScroll={handleEmailsListScroll}
-                >
-
-                    {loading ? (
-                        <div className="flex items-center justify-center py-20">
-                            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary-600 border-t-transparent"></div>
-                        </div>
-                    ) : emails && emails.length > 0 ? (
-                        <>
-                            {emails.map((email, index) => (
+                    <div
+                        ref={emailsListRef}
+                        className="flex-1 overflow-y-auto overflow-x-hidden"
+                        onScroll={handleEmailsListScroll}
+                    >
+                        {loading ? (
+                            <div className="flex items-center justify-center h-32">
+                                <div className="text-gray-500 dark:text-gray-400">加载中...</div>
+                            </div>
+                        ) : emails.length > 0 ? (
+                            emails.map((email) => (
                                 <EmailItem
-                                    key={email.ID || index}
+                                    key={email.ID}
                                     email={email}
                                     selected={selectedEmail?.ID === email.ID}
                                     onSelect={setSelectedEmail}
                                 />
-                            ))}
-
-                            {/* 加载状态 */}
-                            {emailsLoading && (
-                                <div className="flex justify-center py-3">
-                                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"></div>
+                            ))
+                        ) : (
+                            <div className="flex items-center justify-center h-32">
+                                <div className="text-gray-500 dark:text-gray-400">
+                                    {isEmailSearchMode
+                                        ? `没有找到发给 ${emailSearchTarget} 的邮件`
+                                        : '没有邮件'
+                                    }
                                 </div>
-                            )}
+                            </div>
+                        )}
 
-                            {/* 无更多数据提示 */}
-                            {!emailsLoading && emails.length > 0 && !hasMoreEmails && (
-                                <div className="px-3 py-2 text-xs text-center text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700">
-                                    没有更多邮件
-                                </div>
-                            )}
-                        </>
-                    ) : (
-                        <div className="py-20 text-center text-gray-500 dark:text-gray-400">
-                            暂无邮件
-                        </div>
-                    )}
+                        {emailsLoading && (
+                            <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+                                加载更多邮件...
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 右侧邮件详情 */}
+                <div className="flex-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg max-w-[60%] min-w-[400px] overflow-hidden">
+                    <EmailDetail email={selectedEmail} />
                 </div>
             </div>
 
-            {/* 右侧邮件详情 */}
-            <div className="flex-1 bg-white dark:bg-gray-800">
-                <EmailDetail email={selectedEmail} />
-            </div>
-
-            {/* 同步账户模态框 */}
-            {selectedAccount && (
+            {/* 同步确认模态框 */}
+            {showSyncModal && (
                 <SyncAccountModal
                     isOpen={showSyncModal}
                     onClose={() => setShowSyncModal(false)}
                     accountId={selectedAccount}
                     accountEmail={selectedAccountLabel}
-                    onSuccess={handleSyncConfirm}
+                    onSuccess={() => {
+                        setEmailsCurrentPage(1);
+                        setHasMoreEmails(true);
+                        loadEmails(1, true);
+                    }}
+                    onError={(error) => {
+                        console.error('同步失败:', error);
+                        alert('同步失败: ' + error);
+                    }}
                 />
             )}
         </div>
-    );
+    )
 }
+
+

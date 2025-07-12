@@ -857,12 +857,17 @@ func (h *APIHandler) VerifyAccountHandler(w http.ResponseWriter, r *http.Request
 			return
 		}
 
+		var mailProviderID *uint
+		if req.MailProviderID != 0 {
+			mailProviderID = &req.MailProviderID
+		}
+
 		account = models.EmailAccount{
 			EmailAddress:   req.EmailAddress,
 			Password:       req.Password,
 			AuthType:       models.AuthType(req.AuthType),
-			MailProviderID: req.MailProviderID,
-			MailProvider:   *provider,
+			MailProviderID: mailProviderID,
+			MailProvider:   provider,
 			CustomSettings: models.JSONMap(req.CustomSettings),
 			Proxy:          req.Proxy,
 		}
@@ -1550,7 +1555,7 @@ func (h *APIHandler) UpdateAccountHandler(w http.ResponseWriter, r *http.Request
 		existingAccount.Token = *request.Token
 	}
 	if request.MailProviderID != nil {
-		existingAccount.MailProviderID = *request.MailProviderID
+		existingAccount.MailProviderID = request.MailProviderID
 	}
 	if request.Proxy != nil {
 		existingAccount.Proxy = *request.Proxy
@@ -3498,6 +3503,156 @@ func (h *APIHandler) GetEmailStatsHandler(w http.ResponseWriter, r *http.Request
 		TodayEmails:     todayEmails,
 		TotalGrowthRate: totalGrowthRate,
 		TodayGrowthRate: todayGrowthRate,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetAllEmailsHandler retrieves all emails from all accounts with advanced search capabilities
+// @Summary Get all emails with advanced search
+// @Description Get all emails across all accounts with support for date range, text search, and keyword filtering
+// @Tags account-emails
+// @Accept json
+// @Produce json
+// @Param limit query int false "Limit (default: 50, max: 100)"
+// @Param offset query int false "Offset for pagination (default: 0)"
+// @Param sort_by query string false "Sort order: date_desc, date_asc, subject_asc, subject_desc (default: date_desc)"
+// @Param start_date query string false "Start date for filtering (RFC3339 format)"
+// @Param end_date query string false "End date for filtering (RFC3339 format)"
+// @Param from_query query string false "Search in From field (fuzzy match)"
+// @Param to_query query string false "Search in To field (fuzzy match)"
+// @Param cc_query query string false "Search in CC field (fuzzy match)"
+// @Param subject_query query string false "Search in Subject field (fuzzy match)"
+// @Param body_query query string false "Search in email body (fuzzy match)"
+// @Param html_query query string false "Search in HTML body (fuzzy match)"
+// @Param keyword query string false "Global keyword search across all text fields"
+// @Param mailbox query string false "Filter by mailbox name (comma-separated for multiple)"
+// @Success 200 {object} map[string]interface{} "Response with emails array and pagination info"
+// @Router /api/account-emails/list/all [get]
+func (h *APIHandler) GetAllEmailsHandler(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	options := repository.EmailSearchOptions{
+		AccountID: 0, // 0 means all accounts
+		Limit:     50,
+		Offset:    0,
+		SortBy:    "date DESC",
+	}
+
+	// Parse limit
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsedLimit, err := strconv.Atoi(l); err == nil && parsedLimit > 0 {
+			if parsedLimit > 100 {
+				parsedLimit = 100 // Cap at 100
+			}
+			options.Limit = parsedLimit
+		}
+	}
+
+	// Parse offset
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsedOffset, err := strconv.Atoi(o); err == nil && parsedOffset >= 0 {
+			options.Offset = parsedOffset
+		}
+	}
+
+	// Parse sort order
+	if sortBy := r.URL.Query().Get("sort_by"); sortBy != "" {
+		validSortOptions := map[string]string{
+			"date_desc":    "date DESC",
+			"date_asc":     "date ASC",
+			"subject_asc":  "subject ASC",
+			"subject_desc": "subject DESC",
+		}
+		if validSort, exists := validSortOptions[sortBy]; exists {
+			options.SortBy = validSort
+		}
+	}
+
+	// Parse date range
+	if startDate := r.URL.Query().Get("start_date"); startDate != "" {
+		if parsed, err := time.Parse(time.RFC3339, startDate); err == nil {
+			options.StartDate = &parsed
+		}
+	}
+	if endDate := r.URL.Query().Get("end_date"); endDate != "" {
+		if parsed, err := time.Parse(time.RFC3339, endDate); err == nil {
+			options.EndDate = &parsed
+		}
+	}
+
+	// Parse text search parameters
+	options.FromQuery = r.URL.Query().Get("from_query")
+	options.ToQuery = r.URL.Query().Get("to_query")
+	options.CcQuery = r.URL.Query().Get("cc_query")
+	options.SubjectQuery = r.URL.Query().Get("subject_query")
+	options.BodyQuery = r.URL.Query().Get("body_query")
+	options.HTMLQuery = r.URL.Query().Get("html_query")
+	options.Keyword = r.URL.Query().Get("keyword")
+	options.MailboxName = r.URL.Query().Get("mailbox")
+
+	// Perform search
+	emails, totalCount, err := h.EmailRepo.SearchEmails(options)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Calculate pagination info
+	totalPages := int((totalCount + int64(options.Limit) - 1) / int64(options.Limit))
+	currentPage := (options.Offset / options.Limit) + 1
+	hasNext := options.Offset+options.Limit < int(totalCount)
+	hasPrev := options.Offset > 0
+
+	response := map[string]interface{}{
+		"emails": emails,
+		"pagination": map[string]interface{}{
+			"total":        totalCount,
+			"total_pages":  totalPages,
+			"current_page": currentPage,
+			"limit":        options.Limit,
+			"offset":       options.Offset,
+			"has_next":     hasNext,
+			"has_prev":     hasPrev,
+		},
+		"search_criteria": map[string]interface{}{
+			"account_id":    options.AccountID,
+			"start_date":    options.StartDate,
+			"end_date":      options.EndDate,
+			"from_query":    options.FromQuery,
+			"to_query":      options.ToQuery,
+			"cc_query":      options.CcQuery,
+			"subject_query": options.SubjectQuery,
+			"body_query":    options.BodyQuery,
+			"html_query":    options.HTMLQuery,
+			"keyword":       options.Keyword,
+			"mailbox":       options.MailboxName,
+			"sort_by":       options.SortBy,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetEmailFoldersHandler retrieves all unique mailbox folders across all accounts
+// @Summary Get all unique email folders
+// @Description Get all unique mailbox folders (like INBOX, Sent, Drafts, etc.) across all accounts
+// @Tags account-emails
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{} "Response with folders array"
+// @Router /api/account-emails/folders [get]
+func (h *APIHandler) GetEmailFoldersHandler(w http.ResponseWriter, r *http.Request) {
+	folders, err := h.EmailRepo.GetAllMailboxFolders()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"folders": folders,
+		"count":   len(folders),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

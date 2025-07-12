@@ -262,6 +262,10 @@ export class OAuth2Service {
     validateConfig(config: CreateOAuth2ConfigRequest): { valid: boolean; errors: string[] } {
         const errors: string[] = [];
 
+        if (!config.name?.trim()) {
+            errors.push('配置名称是必需的');
+        }
+
         if (!config.provider_type) {
             errors.push('提供商是必需的');
         } else if (!this.getSupportedProviders().includes(config.provider_type)) {

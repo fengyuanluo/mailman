@@ -468,3 +468,20 @@ func (r *EmailRepository) GetEmailsByAccountIDSince(accountID uint, since time.T
 		Find(&emails).Error
 	return emails, err
 }
+
+// GetAllMailboxFolders retrieves all unique mailbox folders across all accounts
+func (r *EmailRepository) GetAllMailboxFolders() ([]string, error) {
+	var folders []string
+	
+	err := r.db.Model(&models.Email{}).
+		Select("DISTINCT mailbox_name").
+		Where("mailbox_name IS NOT NULL AND mailbox_name != ''").
+		Order("mailbox_name ASC").
+		Pluck("mailbox_name", &folders).Error
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	return folders, nil
+}

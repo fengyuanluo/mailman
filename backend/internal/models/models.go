@@ -154,8 +154,8 @@ type EmailAccount struct {
 	AuthType         AuthType            `gorm:"not null;default:'password'" json:"authType"`
 	Password         string              `json:"password,omitempty"` // For AuthTypePassword
 	Token            string              `json:"token,omitempty"`    // For AuthTypeToken
-	MailProviderID   uint                `gorm:"not null" json:"mailProviderId"`
-	MailProvider     MailProvider        `gorm:"foreignKey:MailProviderID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"mailProvider"`
+	MailProviderID   *uint               `gorm:"index" json:"mailProviderId,omitempty"`                                                                      // Make optional - only for accounts that need predefined providers
+	MailProvider     *MailProvider       `gorm:"foreignKey:MailProviderID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"mailProvider,omitempty"` // Make optional
 	OAuth2ProviderID *uint               `gorm:"index" json:"oauth2ProviderId,omitempty"`                                                                    // For OAuth2 authentication, references OAuth2GlobalConfig
 	OAuth2Provider   *OAuth2GlobalConfig `gorm:"foreignKey:OAuth2ProviderID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"oauth2Provider,omitempty"` // OAuth2配置关联
 	Proxy            string              `json:"proxy,omitempty"`                                                                                            // e.g., "socks5://user:pass@host:port"

@@ -249,6 +249,25 @@ class EmailService {
         const response = await apiClient.get('/dashboard/stats')
         return response
     }
+
+    // 获取所有账户的邮件列表
+    async getAllEmails(params: EmailSearchParams = {}) {
+        const queryParams = new URLSearchParams()
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== undefined && value !== '') {
+                queryParams.append(key, value.toString())
+            }
+        })
+
+        const response = await apiClient.get(`/account-emails/list/all?${queryParams}`)
+        return response
+    }
+
+    // 获取所有邮件文件夹
+    async getEmailFolders() {
+        const response = await apiClient.get('/account-emails/folders')
+        return response
+    }
 }
 
 export const emailService = new EmailService()

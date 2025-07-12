@@ -135,6 +135,7 @@ interface OAuth2ConfigModalProps {
 }
 
 export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }: OAuth2ConfigModalProps) {
+    const [name, setName] = useState('')
     const [provider, setProvider] = useState<OAuth2ProviderType>('gmail')
     const [clientId, setClientId] = useState('')
     const [clientSecret, setClientSecret] = useState('')
@@ -189,6 +190,7 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
 
     // 重置表单
     const resetForm = () => {
+        setName('')
         setProvider('gmail')
         setClientId('')
         setClientSecret('')
@@ -252,6 +254,7 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
         if (isOpen) {
             if (config) {
                 // 编辑模式
+                setName(config.name)
                 setProvider(config.provider_type)
                 setClientId(config.client_id)
                 setClientSecret(config.client_secret)
@@ -286,6 +289,7 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
     // 验证表单
     const validateForm = () => {
         const configData: CreateOAuth2ConfigRequest = {
+            name: name,
             provider_type: provider,
             client_id: clientId,
             client_secret: clientSecret,
@@ -336,12 +340,18 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
 
         try {
             const configData: CreateOAuth2ConfigRequest = {
+                name: name,
                 provider_type: provider,
                 client_id: clientId,
                 client_secret: clientSecret,
                 redirect_uri: redirectUri,
                 scopes,
                 is_enabled: enabled
+            }
+
+            // 如果是编辑模式，传递ID
+            if (config?.id) {
+                (configData as any).id = config.id
             }
 
             await oauth2Service.createOrUpdateGlobalConfig(configData)
@@ -421,6 +431,22 @@ export default function OAuth2ConfigModal({ isOpen, onClose, onSuccess, config }
                 )}
 
                 <form onSubmit={handleSubmit} className="space-y-6">
+                    {/* 配置名称 */}
+                    <div>
+                        <Label htmlFor="name">配置名称 *</Label>
+                        <Input
+                            id="name"
+                            type="text"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="例如：Gmail生产配置、Gmail测试配置"
+                            required
+                        />
+                        <p className="mt-1 text-sm text-gray-500">
+                            用于区分不同的OAuth2配置，支持同一提供商的多个配置
+                        </p>
+                    </div>
+
                     {/* 提供商选择 */}
                     <div>
                         <Label htmlFor="provider">邮箱提供商</Label>

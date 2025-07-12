@@ -64,6 +64,9 @@ func NewRouterWithAuth(handler *APIHandler, openAIHandler *OpenAIHandler, authHa
 
 	// Account-specific email operations (protected)
 	authRouter.HandleFunc("/account-emails/fetch/{id}", handler.FetchAndStoreEmailsHandler).Methods("POST")
+	// 新增：获取所有邮件和文件夹的路由（必须放在参数路由之前）
+	authRouter.HandleFunc("/account-emails/list/all", handler.GetAllEmailsHandler).Methods("GET")
+	authRouter.HandleFunc("/account-emails/folders", handler.GetEmailFoldersHandler).Methods("GET")
 	authRouter.HandleFunc("/account-emails/list/{id}", handler.GetEmailsHandler).Methods("GET")
 	authRouter.HandleFunc("/account-emails/extract/{id}", handler.ExtractEmailsHandler).Methods("POST")
 	authRouter.HandleFunc("/accounts/{id}/sync-records", handler.GetIncrementalSyncRecordsHandler).Methods("GET")

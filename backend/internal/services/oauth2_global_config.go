@@ -47,6 +47,12 @@ func (s *OAuth2GlobalConfigService) CreateOrUpdateConfig(config *models.OAuth2Gl
 		}
 	}
 
+	// 如果ID存在且大于0，执行更新操作
+	if config.ID > 0 {
+		return s.repo.Update(config)
+	}
+
+	// 否则执行创建操作
 	return s.repo.Create(config)
 }
 

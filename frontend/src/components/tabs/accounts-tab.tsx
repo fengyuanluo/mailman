@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Plus, Search, MoreVertical, Edit2, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle, Grid, List, Table, ChevronLeft, ChevronRight, Shield, ShieldCheck, Mail, Inbox, ChevronDown, X } from 'lucide-react'
+import { Plus, Search, MoreVertical, Edit2, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle, Grid, List, Table, ChevronLeft, ChevronRight, Shield, ShieldCheck, Mail, Inbox, ChevronDown, X, Settings } from 'lucide-react'
 import { emailAccountService } from '@/services/email-account.service'
 import { oauth2Service } from '@/services/oauth2.service'
 import { EmailAccount } from '@/types'
@@ -285,6 +285,22 @@ export default function AccountsTab() {
         }
     }, [showAddDropdown])
 
+    // 处理OAuth2配置跳转
+    const handleOAuth2Config = (account: EmailAccount) => {
+        console.log('[AccountsTab] 触发OAuth2配置跳转，账户:', account.emailAddress, 'Provider:', account.mailProvider?.type);
+        // 触发切换到OAuth2配置页面，并过滤显示对应的provider
+        const event = new CustomEvent('switchTab', {
+            detail: {
+                tab: 'oauth2-config',
+                data: {
+                    filterProvider: account.mailProvider?.type
+                }
+            }
+        })
+        window.dispatchEvent(event)
+        console.log('[AccountsTab] OAuth2配置跳转事件已触发');
+    }
+
     // 添加处理查看邮件和取件的函数
     const handleViewEmails = (account: EmailAccount) => {
         console.log('[AccountsTab] 触发查看邮件，账户:', account.emailAddress, 'ID:', account.id);
@@ -337,16 +353,6 @@ export default function AccountsTab() {
         pagination.page * pagination.limit
     )
 
-    const getStatusIcon = (status: string | undefined) => {
-        switch (status) {
-            case 'active':
-                return <CheckCircle className="h-4 w-4 text-green-500" />
-            case 'error':
-                return <XCircle className="h-4 w-4 text-red-500" />
-            default:
-                return <AlertCircle className="h-4 w-4 text-yellow-500" />
-        }
-    }
 
     const getProviderColor = (provider: string | undefined) => {
         switch (provider?.toLowerCase()) {
@@ -535,12 +541,6 @@ export default function AccountsTab() {
                                                 {account.mailProvider?.name || account.mailProvider?.type || 'Unknown'}
                                             </span>
                                             <div className="flex items-center space-x-2">
-                                                <div className="flex items-center space-x-1">
-                                                    {getStatusIcon(account.status || 'unknown')}
-                                                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                                                        {account.status === 'active' ? '正常' : account.status === 'error' ? '错误' : '未知'}
-                                                    </span>
-                                                </div>
                                                 {account.isVerified && (
                                                     <div className="flex items-center space-x-1" title={account.verifiedAt ? `验证时间: ${new Date(account.verifiedAt).toLocaleString('zh-CN')}` : '已验证'}>
                                                         <ShieldCheck className="h-4 w-4 text-green-500" />
@@ -591,6 +591,20 @@ export default function AccountsTab() {
                                                     <span>{verifying === account.id ? '验证中' : '验证'}</span>
                                                 </button>
                                             </div>
+
+                                            {/* OAuth2账户特殊按钮行 */}
+                                            {account.authType === 'oauth2' && (
+                                                <div className="flex space-x-2">
+                                                    <button
+                                                        onClick={() => handleOAuth2Config(account)}
+                                                        className="flex flex-1 items-center justify-center space-x-1 rounded-lg bg-blue-600 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                                                    >
+                                                        <Settings className="h-4 w-4" />
+                                                        <span>OAuth2 配置</span>
+                                                    </button>
+                                                </div>
+                                            )}
+
                                             <div className="flex space-x-2">
                                                 <button
                                                     onClick={() => handleEdit(account)}
@@ -633,12 +647,6 @@ export default function AccountsTab() {
                                                     )}>
                                                         {account.mailProvider?.name || account.mailProvider?.type || 'Unknown'}
                                                     </span>
-                                                    <div className="flex items-center space-x-1">
-                                                        {getStatusIcon(account.status || 'unknown')}
-                                                        <span className="text-xs">
-                                                            {account.status === 'active' ? '正常' : account.status === 'error' ? '错误' : '未知'}
-                                                        </span>
-                                                    </div>
                                                     {account.isVerified && (
                                                         <div className="flex items-center space-x-1" title={account.verifiedAt ? `验证时间: ${new Date(account.verifiedAt).toLocaleString('zh-CN')}` : '已验证'}>
                                                             <ShieldCheck className="h-3.5 w-3.5 text-green-500" />
@@ -684,6 +692,15 @@ export default function AccountsTab() {
                                             >
                                                 <Shield className={cn("h-4 w-4", verifying === account.id && "animate-pulse")} />
                                             </button>
+                                            {account.authType === 'oauth2' && (
+                                                <button
+                                                    onClick={() => handleOAuth2Config(account)}
+                                                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                                                    title="OAuth2 配置"
+                                                >
+                                                    <Settings className="h-4 w-4" />
+                                                </button>
+                                            )}
                                             <button
                                                 onClick={() => handleEdit(account)}
                                                 className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
@@ -713,9 +730,6 @@ export default function AccountsTab() {
                                             </th>
                                             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
                                                 提供商
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                                状态
                                             </th>
                                             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
                                                 验证状态
@@ -750,14 +764,6 @@ export default function AccountsTab() {
                                                     )}>
                                                         {account.mailProvider?.name || account.mailProvider?.type || 'Unknown'}
                                                     </span>
-                                                </td>
-                                                <td className="whitespace-nowrap px-6 py-4">
-                                                    <div className="flex items-center space-x-1">
-                                                        {getStatusIcon(account.status || 'unknown')}
-                                                        <span className="text-sm text-gray-500 dark:text-gray-400">
-                                                            {account.status === 'active' ? '正常' : account.status === 'error' ? '错误' : '未知'}
-                                                        </span>
-                                                    </div>
                                                 </td>
                                                 <td className="whitespace-nowrap px-6 py-4">
                                                     {account.isVerified ? (
@@ -804,6 +810,15 @@ export default function AccountsTab() {
                                                         >
                                                             <Shield className={cn("h-4 w-4", verifying === account.id && "animate-pulse")} />
                                                         </button>
+                                                        {account.authType === 'oauth2' && (
+                                                            <button
+                                                                onClick={() => handleOAuth2Config(account)}
+                                                                className="rounded-lg p-1.5 text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                                                                title="OAuth2 配置"
+                                                            >
+                                                                <Settings className="h-4 w-4" />
+                                                            </button>
+                                                        )}
                                                         <button
                                                             onClick={() => handleEdit(account)}
                                                             className="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
@@ -923,3 +938,4 @@ export default function AccountsTab() {
         </>
     )
 }
+
