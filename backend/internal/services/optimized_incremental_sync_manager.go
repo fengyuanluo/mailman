@@ -77,9 +77,9 @@ func NewOptimizedIncrementalSyncManager(
 		cancel:         cancel,
 		logger:         utils.NewLogger("OptimizedSyncManager"),
 		activityLogger: GetActivityLogger(),
-		batchSize:      10,               // 每批处理10个账户
-		pollInterval:   15 * time.Second, // 轮询间隔15秒
-		dbTimeout:      5 * time.Second,  // 数据库操作5秒超时
+		batchSize:      10,              // 每批处理10个账户
+		pollInterval:   2 * time.Second, // 轮询间隔2秒，保证能够及时检查所有同步间隔
+		dbTimeout:      5 * time.Second, // 数据库操作5秒超时
 	}
 }
 
@@ -262,29 +262,80 @@ func (m *OptimizedIncrementalSyncManager) syncWorker() {
 // processAccountSync 处理单个账户的同步
 func (m *OptimizedIncrementalSyncManager) processAccountSync(job syncJob) {
 	accountID := job.accountID
-	config := job.config
 
 	// 创建带超时的上下文
 	ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 	defer cancel()
 
+	// 验证账户状态
+	configWithAccount, err := m.syncConfigRepo.GetByAccountIDWithAccount(accountID)
+	if err != nil {
+		m.logger.Error("Failed to get account details for %d: %v", accountID, err)
+		return
+	}
+
+	// 检查账户是否仍然有效
+	if configWithAccount.Account.ID == 0 || !configWithAccount.Account.IsVerified || configWithAccount.Account.DeletedAt.Valid {
+		m.logger.Warn("Account %d is invalid for sync (verified: %v, deleted: %v)",
+			accountID, configWithAccount.Account.IsVerified, configWithAccount.Account.DeletedAt.Valid)
+
+		// 从缓存中移除无效账户
+		m.configMu.Lock()
+		delete(m.syncConfigs, accountID)
+		delete(m.lastSyncTimes, accountID)
+		m.configMu.Unlock()
+
+		return
+	}
+
 	// 更新同步状态为正在同步
-	err := m.syncConfigRepo.UpdateSyncStatus(accountID, models.SyncStatusSyncing, "")
+	err = m.syncConfigRepo.UpdateSyncStatus(accountID, models.SyncStatusSyncing, "")
 	if err != nil {
 		m.logger.Error("Failed to update sync status for account %d: %v", accountID, err)
 		// 继续执行，不要因为状态更新失败而中断同步
 	}
 
 	// 记录同步开始活动
-	m.activityLogger.LogSyncActivity(models.ActivitySyncStarted, config.Account.EmailAddress, nil, nil)
+	m.activityLogger.LogSyncActivity(models.ActivitySyncStarted, configWithAccount.Account.EmailAddress, nil, nil)
 
 	// 创建获取请求
+	// 使用正确的时间窗口管理：基于上次同步结束时间，避免遗漏
+	var startDate *time.Time
+	var endDate time.Time = time.Now()
+
+	if configWithAccount.LastSyncEndTime != nil {
+		// 增量同步：使用上次同步结束时间减5分钟作为开始时间
+		// 5分钟缓冲区确保不会因为邮件送达延迟而遗漏邮件
+		lastEndMinus5Min := configWithAccount.LastSyncEndTime.Add(-5 * time.Minute)
+
+		// 但不超过24小时前，避免处理过多历史邮件
+		twentyFourHoursAgo := time.Now().Add(-24 * time.Hour)
+		if lastEndMinus5Min.Before(twentyFourHoursAgo) {
+			startDate = &twentyFourHoursAgo
+			m.logger.Info("Using 24h fallback for account %d: last_sync_end_time too old (%v)",
+				accountID, configWithAccount.LastSyncEndTime)
+		} else {
+			startDate = &lastEndMinus5Min
+			m.logger.Info("Using 5-minute buffer for account %d: start from %v (end_time: %v)",
+				accountID, lastEndMinus5Min, configWithAccount.LastSyncEndTime)
+		}
+	} else {
+		// 首次同步，从24小时前开始
+		twentyFourHoursAgo := time.Now().Add(-24 * time.Hour)
+		startDate = &twentyFourHoursAgo
+		m.logger.Info("First-time sync for account %d: using 24h lookback", accountID)
+	}
+
+	m.logger.Info("Fetching emails from %d folders since %v to %v",
+		len([]string{}), startDate, endDate)
+
 	fetchReq := FetchRequest{
 		Type:         SubscriptionTypeRealtime,
 		Priority:     PriorityHigh,
-		EmailAddress: config.Account.EmailAddress,
-		StartDate:    config.LastSyncTime,
-		Folders:      config.SyncFolders,
+		EmailAddress: configWithAccount.Account.EmailAddress,
+		StartDate:    startDate,        // 基于上次结束时间计算
+		EndDate:      &endDate,         // 记录本次同步结束时间
+		Folders:      []string{},       // 空数组表示同步所有文件夹
 		Timeout:      20 * time.Second, // 设置合理的超时时间
 	}
 
@@ -302,7 +353,8 @@ func (m *OptimizedIncrementalSyncManager) processAccountSync(job syncJob) {
 	emailsProcessed, hasNewEmails, err := m.handleSyncBatch(emails)
 
 	// 更新最后同步时间（即使没有新邮件也更新）
-	m.processFetchComplete(accountID, emailsProcessed, hasNewEmails)
+	// 传入同步的结束时间，确保时间窗口准确
+	m.processFetchComplete(accountID, emailsProcessed, hasNewEmails, endDate)
 
 	// 更新内部缓存中的最后同步时间
 	now := time.Now()
@@ -314,41 +366,80 @@ func (m *OptimizedIncrementalSyncManager) processAccountSync(job syncJob) {
 		accountID, emailsProcessed, hasNewEmails)
 }
 
-// fetchEmails 从邮件服务器获取邮件
+// fetchEmails 从邮件服务器获取邮件 - 直接调用获取服务，无过滤
 func (m *OptimizedIncrementalSyncManager) fetchEmails(ctx context.Context, req FetchRequest) ([]models.Email, error) {
-	// 创建一个带超时的子上下文，确保订阅会被及时清理
-	fetchCtx, cancel := context.WithTimeout(ctx, req.Timeout)
-	defer cancel()
+	m.logger.Info("Starting direct email fetch for %s (bypass subscription filters)", req.EmailAddress)
 
-	// 订阅并获取邮件通道
-	emailChan, err := m.scheduler.Subscribe(fetchCtx, req)
+	// 获取账户信息
+	account, err := m.getAccountByEmail(req.EmailAddress)
 	if err != nil {
-		return nil, fmt.Errorf("failed to subscribe: %w", err)
+		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 
-	// 收集邮件
-	var emails []models.Email
-	collectTimeout := time.After(req.Timeout)
+	// 直接调用 FetcherService，绕过订阅管理器的过滤逻辑
+	fetcherService := m.scheduler.GetFetcherService()
+	if fetcherService == nil {
+		return nil, fmt.Errorf("fetcher service not available")
+	}
 
-	for {
-		select {
-		case email, ok := <-emailChan:
-			if !ok {
-				// 通道已关闭，结束收集
-				return emails, nil
-			}
-			emails = append(emails, email)
+	// 确定要获取的文件夹
+	folders := req.Folders
+	if len(folders) == 0 {
+		// 自动获取所有文件夹
+		allFolders, err := fetcherService.GetAllFolders(*account)
+		if err != nil {
+			m.logger.Warn("Failed to get all folders, using common defaults: %v", err)
+			// 使用常用文件夹作为后备
+			allFolders = []string{"INBOX", "SENT", "DRAFTS"}
+		}
+		folders = allFolders
+		m.logger.Info("Auto-discovered %d folders for %s: %v", len(folders), account.EmailAddress, folders)
+	}
 
-		case <-collectTimeout:
-			// 收集超时，返回已收集的邮件
-			m.logger.Debug("Email collection timeout reached, returning %d emails", len(emails))
-			return emails, nil
+	// 获取邮件，使用宽松的时间过滤
+	var startDate *time.Time
+	if req.StartDate != nil {
+		startDate = req.StartDate
+	} else {
+		// 默认获取最近7天的邮件
+		defaultStart := time.Now().Add(-7 * 24 * time.Hour)
+		startDate = &defaultStart
+	}
 
-		case <-fetchCtx.Done():
-			// 上下文取消或超时
-			return emails, fetchCtx.Err()
+	m.logger.Info("Fetching emails from %d folders since %v", len(folders), startDate.Format("2006-01-02 15:04:05"))
+
+	// 使用 FetcherService 直接获取邮件
+	options := FetchEmailsOptions{
+		Folders:         folders,
+		StartDate:       startDate,
+		EndDate:         req.EndDate, // 使用请求中的结束时间
+		FetchFromServer: true,        // 关键修复：从邮件服务器获取新邮件
+		IncludeBody:     true,        // 包含邮件正文
+	}
+
+	emails, err := fetcherService.FetchEmailsFromMultipleMailboxes(*account, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch emails: %w", err)
+	}
+
+	m.logger.Info("Successfully fetched %d emails from mailboxes (no filtering applied)", len(emails))
+	return emails, nil
+}
+
+// getAccountByEmail 根据邮箱地址获取账户信息
+func (m *OptimizedIncrementalSyncManager) getAccountByEmail(emailAddress string) (*models.EmailAccount, error) {
+	// 这里需要添加获取账户的逻辑
+	// 暂时通过遍历配置获取
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+
+	for _, config := range m.syncConfigs {
+		if config.Account.EmailAddress == emailAddress {
+			return &config.Account, nil
 		}
 	}
+
+	return nil, fmt.Errorf("account not found for email: %s", emailAddress)
 }
 
 // updateSyncStatus 更新同步状态
@@ -362,7 +453,7 @@ func (m *OptimizedIncrementalSyncManager) updateSyncStatus(accountID uint, statu
 func (m *OptimizedIncrementalSyncManager) configChangeMonitor() {
 	defer m.wg.Done()
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	m.logger.Debug("Started monitoring for config changes")
@@ -379,7 +470,7 @@ func (m *OptimizedIncrementalSyncManager) configChangeMonitor() {
 	}
 }
 
-// checkConfigChanges 检查配置变更
+// checkConfigChanges 检查配置变更并应用全局配置到新账户
 func (m *OptimizedIncrementalSyncManager) checkConfigChanges() {
 	configs, err := m.syncConfigRepo.GetEnabledConfigsWithAccounts()
 	if err != nil {
@@ -390,12 +481,27 @@ func (m *OptimizedIncrementalSyncManager) checkConfigChanges() {
 	// 将从数据库获取的配置转换为Map便于查找
 	newConfigs := make(map[uint]models.EmailAccountSyncConfig)
 	for _, config := range configs {
+		// 验证账户状态
+		if config.Account.ID != 0 && (!config.Account.IsVerified || config.Account.DeletedAt.Valid) {
+			m.logger.Info("Skipping invalid account %d (verified: %v, deleted: %v)",
+				config.AccountID, config.Account.IsVerified, config.Account.DeletedAt.Valid)
+			continue
+		}
 		newConfigs[config.AccountID] = config
 	}
 
 	// 更新配置缓存
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
+
+	// 清理无效账户的配置
+	for accountID := range m.syncConfigs {
+		if _, exists := newConfigs[accountID]; !exists {
+			m.logger.Info("Removing config for account %d (no longer valid)", accountID)
+			delete(m.syncConfigs, accountID)
+			delete(m.lastSyncTimes, accountID)
+		}
+	}
 
 	// 检查新增或更新的配置
 	for accountID, config := range newConfigs {
@@ -405,10 +511,10 @@ func (m *OptimizedIncrementalSyncManager) checkConfigChanges() {
 			m.logger.Info("Found new or updated config for account %d", accountID)
 			m.syncConfigs[accountID] = config
 
-			// 重置最后同步时间以触发立即同步
-			if config.EnableAutoSync {
-				// 使用零值或较早的时间来触发下次轮询时立即同步
-				m.lastSyncTimes[accountID] = time.Now().Add(-24 * time.Hour)
+			// 只在新增配置时重置最后同步时间，更新配置时保持原有的同步时间
+			if !exists && config.EnableAutoSync {
+				// 新账户：设置较早的时间以触发首次同步
+				m.lastSyncTimes[accountID] = time.Now().Add(-1 * time.Hour)
 			}
 		}
 	}
@@ -420,6 +526,58 @@ func (m *OptimizedIncrementalSyncManager) checkConfigChanges() {
 			delete(m.syncConfigs, accountID)
 			delete(m.lastSyncTimes, accountID)
 		}
+	}
+
+	// 应用全局配置到未配置的已验证账户
+	m.applyGlobalConfigToNewAccounts()
+}
+
+// applyGlobalConfigToNewAccounts 应用全局配置到验证账户
+func (m *OptimizedIncrementalSyncManager) applyGlobalConfigToNewAccounts() {
+	// 获取全局配置
+	globalConfig, err := m.syncConfigRepo.GetGlobalConfig()
+	if err != nil {
+		m.logger.Debug("No global config found or error retrieving it: %v", err)
+		return
+	}
+
+	// 检查是否启用了全局同步
+	if !globalConfig["default_enable_sync"].(bool) {
+		return
+	}
+
+	// 获取未配置的已验证账户
+	accounts, err := m.syncConfigRepo.GetVerifiedAccountsWithoutSyncConfig()
+	if err != nil {
+		m.logger.Error("Failed to get accounts without sync config: %v", err)
+		return
+	}
+
+	for _, account := range accounts {
+		m.logger.Info("Applying global config to account %d", account.ID)
+
+		// 创建基于全局设置的默认配置
+		config := &models.EmailAccountSyncConfig{
+			AccountID:      account.ID,
+			EnableAutoSync: globalConfig["default_enable_sync"].(bool),
+			SyncInterval:   globalConfig["default_sync_interval"].(int),
+			SyncFolders:    models.StringSlice(globalConfig["default_sync_folders"].([]string)),
+			SyncStatus:     models.SyncStatusIdle,
+		}
+
+		// 保存配置
+		if err := m.syncConfigRepo.CreateOrUpdate(config); err != nil {
+			m.logger.Error("Failed to create default sync config for account %d: %v", account.ID, err)
+			continue
+		}
+
+		// 添加到内存缓存
+		config.Account = account
+		m.syncConfigs[account.ID] = *config
+		// 设置较早的时间以触发立即同步
+		m.lastSyncTimes[account.ID] = time.Now().Add(-24 * time.Hour)
+
+		m.logger.Info("Successfully auto-configured account %d", account.ID)
 	}
 }
 
@@ -495,16 +653,17 @@ func (m *OptimizedIncrementalSyncManager) UpdateSubscription(accountID uint, con
 }
 
 // processFetchComplete 处理获取完成后的逻辑，确保更新同步时间
-func (m *OptimizedIncrementalSyncManager) processFetchComplete(accountID uint, emailsProcessed int, hasNewEmails bool) error {
+func (m *OptimizedIncrementalSyncManager) processFetchComplete(accountID uint, emailsProcessed int, hasNewEmails bool, syncEndTime time.Time) error {
 	// 获取当前配置
 	config, err := m.syncConfigRepo.GetByAccountID(accountID)
 	if err != nil {
 		return fmt.Errorf("failed to get sync config: %w", err)
 	}
 
-	// 无论是否有新邮件，都更新最后同步时间
+	// 无论是否有新邮件，都更新最后同步时间和结束时间
 	now := time.Now()
 	config.LastSyncTime = &now
+	config.LastSyncEndTime = &syncEndTime // 保存本次同步的结束时间，用于下次增量同步
 	config.SyncStatus = models.SyncStatusIdle
 
 	// 只有在没有新邮件时才需要强制更新，有新邮件时 handleSyncBatch 已经更新过了
@@ -512,7 +671,7 @@ func (m *OptimizedIncrementalSyncManager) processFetchComplete(accountID uint, e
 		if err := m.syncConfigRepo.CreateOrUpdate(config); err != nil {
 			return fmt.Errorf("failed to update sync time: %w", err)
 		}
-		m.logger.Info("Updated last sync time for account %d (no new emails)", accountID)
+		m.logger.Info("Updated last sync time for account %d (no new emails), end_time: %v", accountID, syncEndTime)
 	}
 
 	// 记录统计信息
@@ -613,12 +772,26 @@ func (m *OptimizedIncrementalSyncManager) SyncNow(accountID uint) (*SyncResult, 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		// 获取邮件
+		// 获取邮件 - 应用5分钟缓冲区逻辑
+		endTime := time.Now()
+		var startTime *time.Time
+
+		if config.LastSyncEndTime != nil {
+			// 使用上次同步结束时间减5分钟作为开始时间
+			bufferTime := config.LastSyncEndTime.Add(-5 * time.Minute)
+			startTime = &bufferTime
+		} else if config.LastSyncTime != nil {
+			// 兼容旧版本，如果没有LastSyncEndTime则使用LastSyncTime减5分钟
+			bufferTime := config.LastSyncTime.Add(-5 * time.Minute)
+			startTime = &bufferTime
+		}
+
 		fetchReq := FetchRequest{
 			Type:         SubscriptionTypeRealtime,
 			Priority:     PriorityHigh,
 			EmailAddress: config.Account.EmailAddress,
-			StartDate:    config.LastSyncTime,
+			StartDate:    startTime,
+			EndDate:      &endTime,
 			Folders:      config.SyncFolders,
 			Timeout:      30 * time.Second,
 		}
@@ -637,7 +810,7 @@ func (m *OptimizedIncrementalSyncManager) SyncNow(accountID uint) (*SyncResult, 
 		}
 
 		// 更新最后同步时间
-		if err := m.processFetchComplete(accountID, emailsProcessed, hasNewEmails); err != nil {
+		if err := m.processFetchComplete(accountID, emailsProcessed, hasNewEmails, endTime); err != nil {
 			errorCh <- err
 			return
 		}
@@ -666,5 +839,3 @@ func (m *OptimizedIncrementalSyncManager) SyncNow(accountID uint) (*SyncResult, 
 		return nil, fmt.Errorf("sync operation timed out")
 	}
 }
-
-// 使用IncrementalSyncManager.SyncResult类型，避免重复定义

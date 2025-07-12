@@ -55,10 +55,27 @@ func (r *SyncConfigRepository) GetEnabledConfigs() ([]models.EmailAccountSyncCon
 }
 
 // GetEnabledConfigsWithAccounts retrieves all enabled sync configs with account details
+// Only returns configs for verified, non-deleted accounts
 func (r *SyncConfigRepository) GetEnabledConfigsWithAccounts() ([]models.EmailAccountSyncConfig, error) {
 	var configs []models.EmailAccountSyncConfig
-	err := r.db.Preload("Account").Preload("Account.MailProvider").Where("enable_auto_sync = ?", true).Find(&configs).Error
+	err := r.db.Preload("Account").Preload("Account.MailProvider").
+		Joins("JOIN email_accounts ON email_accounts.id = email_account_sync_configs.account_id").
+		Where("email_account_sync_configs.enable_auto_sync = ?", true).
+		Where("email_accounts.is_verified = ?", true).
+		Where("email_accounts.deleted_at IS NULL").
+		Find(&configs).Error
 	return configs, err
+}
+
+// GetVerifiedAccountsWithoutSyncConfig retrieves all verified, non-deleted accounts without sync config
+func (r *SyncConfigRepository) GetVerifiedAccountsWithoutSyncConfig() ([]models.EmailAccount, error) {
+	var accounts []models.EmailAccount
+	err := r.db.Preload("MailProvider").
+		Where("is_verified = ?", true).
+		Where("deleted_at IS NULL").
+		Where("id NOT IN (SELECT account_id FROM email_account_sync_configs)").
+		Find(&accounts).Error
+	return accounts, err
 }
 
 // GetByID retrieves sync config by ID

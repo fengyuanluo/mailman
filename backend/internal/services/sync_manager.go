@@ -2,6 +2,7 @@ package services
 
 import (
 	"mailman/internal/models"
+	"time"
 )
 
 // SyncManager 定义同步管理器接口，允许不同实现之间的互操作性
@@ -19,6 +20,12 @@ type SyncManager interface {
 	UpdateSubscription(accountID uint, config *models.EmailAccountSyncConfig) error
 }
 
-// 确保两种实现都满足接口要求
-var _ SyncManager = (*IncrementalSyncManager)(nil)
+// SyncResult represents the result of a sync operation
+type SyncResult struct {
+	EmailsSynced int
+	Duration     time.Duration
+	Error        error
+}
+
+// 确保实现满足接口要求
 var _ SyncManager = (*OptimizedIncrementalSyncManager)(nil)

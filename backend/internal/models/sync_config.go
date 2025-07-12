@@ -11,7 +11,8 @@ type EmailAccountSyncConfig struct {
 	EnableAutoSync    bool        `gorm:"default:true" json:"enable_auto_sync"`
 	SyncInterval      int         `gorm:"default:300" json:"sync_interval"` // seconds
 	SyncFolders       StringSlice `gorm:"type:text" json:"sync_folders"`
-	LastSyncTime      *time.Time  `json:"last_sync_time,omitempty"`
+	LastSyncTime      *time.Time  `json:"last_sync_time,omitempty"`     // 上次同步开始时间
+	LastSyncEndTime   *time.Time  `json:"last_sync_end_time,omitempty"` // 上次同步结束时间
 	LastSyncMessageID string      `json:"last_sync_message_id,omitempty"`
 	LastSyncError     string      `json:"last_sync_error,omitempty"`
 	SyncStatus        string      `gorm:"default:idle" json:"sync_status"` // idle, syncing, error

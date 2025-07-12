@@ -22,7 +22,7 @@ import (
 
 func main() {
 	// 获取账户ID参数
-	accountID := uint(39)
+	accountID := uint(41)
 
 	fmt.Printf("开始测试Gmail API访问，账户ID: %d\n", accountID)
 

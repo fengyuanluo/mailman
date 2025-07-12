@@ -210,6 +210,11 @@ func (s *EmailFetchScheduler) triggerFetch(realMailbox string) {
 	s.workerPool.TriggerFetch(realMailbox)
 }
 
+// GetFetcherService 获取获取器服务实例
+func (s *EmailFetchScheduler) GetFetcherService() *FetcherService {
+	return s.fetcherService
+}
+
 // setupSubscriptionHooks 设置订阅钩子
 func (s *EmailFetchScheduler) setupSubscriptionHooks() {
 	s.subscriptionMgr.hooks = SubscriptionHooks{

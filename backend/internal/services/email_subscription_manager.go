@@ -379,64 +379,115 @@ func (m *SubscriptionManager) deliverEmail(sub *Subscription, email models.Email
 
 // matchesFilter 检查邮件是否匹配过滤器
 func (m *SubscriptionManager) matchesFilter(email models.Email, filter EmailFilter) bool {
-	// 添加详细的调试日志
-	log.Printf("[SubscriptionManager] DEBUG: Checking filter for email ID=%s, Subject=%s", email.ID, email.Subject)
-	log.Printf("[SubscriptionManager] DEBUG: Filter - EmailAddress=%s, RealMailbox=%s", filter.EmailAddress, filter.RealMailbox)
-	log.Printf("[SubscriptionManager] DEBUG: Email - To=%v, From=%v, MailboxName=%s", email.To, email.From, email.MailboxName)
-
-	// 检查日期范围
-	if filter.StartDate != nil && email.Date.Before(*filter.StartDate) {
-		log.Printf("[SubscriptionManager] DEBUG: Email date %v is before StartDate %v", email.Date, *filter.StartDate)
-		return false
-	}
-	if filter.EndDate != nil && email.Date.After(*filter.EndDate) {
-		log.Printf("[SubscriptionManager] DEBUG: Email date %v is after EndDate %v", email.Date, *filter.EndDate)
-		return false
+	// 获取邮件主题的前50个字符用于日志
+	subjectPreview := email.Subject
+	if len(subjectPreview) > 50 {
+		subjectPreview = subjectPreview[:50] + "..."
 	}
 
-	// 检查别名匹配
-	if filter.EmailAddress != "" && !m.matchesAlias(email, filter.EmailAddress) {
-		log.Printf("[SubscriptionManager] DEBUG: Email does not match alias %s", filter.EmailAddress)
-		return false
+	log.Printf("[SubscriptionManager] DEBUG: 检查邮件: %s", subjectPreview)
+
+	var filterResults []string
+	allMatched := true
+
+	// 检查时间范围
+	if filter.StartDate != nil {
+		if email.Date.Before(*filter.StartDate) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 时间过滤失败: 邮件时间 %v 早于开始时间 %v", email.Date, *filter.StartDate))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 时间过滤通过: 邮件时间 %v 晚于开始时间 %v", email.Date, *filter.StartDate))
+		}
 	}
 
-	// 检查主题
-	if filter.Subject != "" && !containsIgnoreCase(email.Subject, filter.Subject) {
-		log.Printf("[SubscriptionManager] DEBUG: Email subject '%s' does not contain '%s'", email.Subject, filter.Subject)
-		return false
-	}
-
-	// 检查发件人
-	if filter.From != "" && !m.matchesAddress(email.From, filter.From) {
-		log.Printf("[SubscriptionManager] DEBUG: Email from '%v' does not match '%s'", email.From, filter.From)
-		return false
-	}
-
-	// 检查收件人
-	if filter.To != "" && !m.matchesAddress(email.To, filter.To) {
-		log.Printf("[SubscriptionManager] DEBUG: Email to '%v' does not match '%s'", email.To, filter.To)
-		return false
-	}
-
-	// 检查附件
-	if filter.HasAttachment != nil && *filter.HasAttachment != (len(email.Attachments) > 0) {
-		log.Printf("[SubscriptionManager] DEBUG: Email attachment requirement not met. Required=%v, Has=%v", *filter.HasAttachment, len(email.Attachments) > 0)
-		return false
+	if filter.EndDate != nil {
+		if email.Date.After(*filter.EndDate) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 结束时间过滤失败: 邮件时间 %v 晚于结束时间 %v", email.Date, *filter.EndDate))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 结束时间过滤通过: 邮件时间 %v 早于结束时间 %v", email.Date, *filter.EndDate))
+		}
 	}
 
 	// 检查文件夹
-	if len(filter.Folders) > 0 && !contains(filter.Folders, email.MailboxName) {
-		log.Printf("[SubscriptionManager] DEBUG: Email mailbox '%s' not in allowed folders %v", email.MailboxName, filter.Folders)
-		return false
+	if len(filter.Folders) > 0 {
+		if !contains(filter.Folders, email.MailboxName) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 文件夹过滤失败: 邮件在 '%s'，但允许的文件夹为 %v", email.MailboxName, filter.Folders))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 文件夹过滤通过: 邮件在允许的文件夹 '%s'", email.MailboxName))
+		}
+	}
+
+	// 检查别名匹配
+	if filter.EmailAddress != "" {
+		if !m.matchesAlias(email, filter.EmailAddress) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 别名匹配失败: 邮件收件人 %v 不包含 %s", email.To, filter.EmailAddress))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, "  ✓ 别名匹配通过")
+		}
+	}
+
+	// 检查主题
+	if filter.Subject != "" {
+		if !containsIgnoreCase(email.Subject, filter.Subject) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 主题过滤失败: 邮件主题 '%s' 不包含 '%s'", subjectPreview, filter.Subject))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 主题过滤通过: 邮件主题包含 '%s'", filter.Subject))
+		}
+	}
+
+	// 检查发件人
+	if filter.From != "" {
+		if !m.matchesAddress(email.From, filter.From) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 发件人过滤失败: 邮件发件人 '%v' 不匹配 '%s'", email.From, filter.From))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 发件人过滤通过: 邮件发件人匹配 '%s'", filter.From))
+		}
+	}
+
+	// 检查收件人
+	if filter.To != "" {
+		if !m.matchesAddress(email.To, filter.To) {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 收件人过滤失败: 邮件收件人 '%v' 不匹配 '%s'", email.To, filter.To))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 收件人过滤通过: 邮件收件人匹配 '%s'", filter.To))
+		}
+	}
+
+	// 检查附件
+	if filter.HasAttachment != nil {
+		hasAttachment := len(email.Attachments) > 0
+		if *filter.HasAttachment != hasAttachment {
+			filterResults = append(filterResults, fmt.Sprintf("  ❌ 附件过滤失败: 要求有附件=%v，实际有附件=%v", *filter.HasAttachment, hasAttachment))
+			allMatched = false
+		} else {
+			filterResults = append(filterResults, fmt.Sprintf("  ✓ 附件过滤通过: 附件要求=%v", *filter.HasAttachment))
+		}
 	}
 
 	// 自定义过滤器扩展点
 	if len(filter.CustomFilters) > 0 {
-		// 这里可以添加自定义过滤逻辑
+		filterResults = append(filterResults, "  ⚠️  自定义过滤器待实现")
 	}
 
-	log.Printf("[SubscriptionManager] DEBUG: Email matches all filter conditions!")
-	return true
+	// 输出所有过滤结果
+	for _, result := range filterResults {
+		log.Printf("[SubscriptionManager] DEBUG: %s", result)
+	}
+
+	// 输出最终结果
+	if allMatched {
+		log.Printf("[SubscriptionManager] DEBUG:   ✅ 邮件通过所有过滤条件")
+	} else {
+		log.Printf("[SubscriptionManager] DEBUG:   ❌ 邮件会被过滤掉")
+	}
+
+	return allMatched
 }
 
 // monitorSubscription 监控订阅生命周期
